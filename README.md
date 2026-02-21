@@ -3,9 +3,11 @@
 
 Free TLS certificates for Azure Application Gateway v2 using Let's Encrypt. Includes full Bicep infrastructure (VNet, App Gateway, Key Vault, backend VMs) and automated certificate issuance via DNS-01 or HTTP-01.
 
-No certificate purchase required. No public IP required (for DNS-01).
+No certificate purchase required. Public App Gateway with Key Vault TLS integration.
 
 > **New to Let's Encrypt?** Read [How Let's Encrypt Works](docs/HOW-LETS-ENCRYPT-WORKS.md) first — it explains certificates, ACME challenges, certbot, PFX conversion, and the trust chain in plain language before you dive into the lab steps.
+>
+> **First time doing this?** Follow the [Step-by-Step Walkthrough](docs/STEP-BY-STEP-GUIDE.md) — it walks through every command with expected outputs, troubleshooting, and DNS provider examples (Azure DNS, Cloudflare, GoDaddy).
 
 ## What This Repo Deploys
 
@@ -21,7 +23,7 @@ No certificate purchase required. No public IP required (for DNS-01).
 │  │  │ 10.0.0.0/24         │   │ 10.0.1.0/24                  │   │  │
 │  │  │                     │   │                              │   │  │
 │  │  │  App Gateway v2     │──►│  VM 1 (NGINX)  ◄── no pub IP│   │  │
-│  │  │  Private IP only    │   │  VM 2 (NGINX)  ◄── no pub IP│   │  │
+│  │  │  Public + Private IP│   │  VM 2 (NGINX)  ◄── no pub IP│   │  │
 │  │  │  HTTPS (443)        │   │                              │   │  │
 │  │  │                     │   └──────────────────────────────┘   │  │
 │  │  └──────────┬──────────┘                                      │  │
@@ -42,16 +44,16 @@ No certificate purchase required. No public IP required (for DNS-01).
 |---|---|
 | **User-Assigned Managed Identity** | App Gateway → Key Vault access (enterprise-preferred over system-assigned) |
 | **VNet** with dedicated subnets | App GW subnet (required isolation), backend subnet, optional Bastion |
-| **Application Gateway v2** | Standard_v2 or WAF_v2, private IP only, autoscale, HTTPS listener |
+| **Application Gateway v2** | Standard_v2 or WAF_v2, public + private IP, autoscale, HTTPS listener |
 | **Azure Key Vault** | RBAC-based, stores TLS cert, referenced via secret URI |
 | **Backend VMs** (Linux + NGINX) | 2 VMs, no public IPs, unique page per VM for LB demo |
-| **NSGs** | App GW subnet allows GatewayManager + HTTPS; backend allows only App GW traffic |
+| **NSGs** | App GW subnet allows GatewayManager + HTTP + HTTPS; backend allows only App GW traffic |
 
 ### Design Decisions
 
 | Decision | Rationale |
 |---|---|
-| Private IP only on App Gateway | Enterprise pattern, zero public exposure |
+| Public + private frontend on App Gateway | Public IP enables internet/browser testing; private IP for VNet-internal access |
 | User-assigned managed identity | Reusable, explicit RBAC, cleaner than system-assigned |
 | Key Vault with Azure RBAC (not access policies) | Modern best practice, granular control |
 | Key Vault Secrets User role (not Contributor) | Minimum required: `secrets/get` |
@@ -81,15 +83,19 @@ Note the outputs — you'll need `keyVaultName` for the cert import.
 
 ### Step 2 — Issue Certificate (DNS-01)
 
+> **Need the full walkthrough?** See the [Step-by-Step Guide](docs/STEP-BY-STEP-GUIDE.md) for detailed instructions with expected outputs, DNS provider examples, and troubleshooting.
+
 ```bash
 # Automated (Azure DNS)
-./scripts/option-b-private/azure-dns-certbot.ps1 \
-  -Domain "appgw-lab.yourdomain.com" \
-  -DnsZoneName "yourdomain.com" \
-  -DnsResourceGroupName "dns-rg"
+./scripts/option-b-private/azure-dns-certbot.sh \
+  -d appgw-lab.yourdomain.com \
+  --dns-zone yourdomain.com \
+  --dns-rg dns-rg
 
 # Or manual
-sudo certbot certonly --manual --preferred-challenges dns -d appgw-lab.yourdomain.com
+certbot certonly --manual --preferred-challenges dns \
+  --config-dir ~/letsencrypt --work-dir ~/letsencrypt/work --logs-dir ~/letsencrypt/logs \
+  -d appgw-lab.yourdomain.com
 ```
 
 ### Step 3 — Convert to PFX
@@ -97,41 +103,72 @@ sudo certbot certonly --manual --preferred-challenges dns -d appgw-lab.yourdomai
 ```bash
 openssl pkcs12 -export \
   -out appgw-cert.pfx \
-  -inkey /etc/letsencrypt/live/appgw-lab.yourdomain.com/privkey.pem \
-  -in /etc/letsencrypt/live/appgw-lab.yourdomain.com/fullchain.pem
+  -inkey ~/letsencrypt/live/appgw-lab.yourdomain.com/privkey.pem \
+  -in ~/letsencrypt/live/appgw-lab.yourdomain.com/fullchain.pem
 ```
 
 ### Step 4 — Import to Key Vault
 
-```powershell
-./scripts/shared/import-to-kv.ps1 \
-  -KeyVaultName "kv-appgw-xxx" \
-  -PfxPath "./appgw-cert.pfx" \
-  -PfxPassword "yourpassword"
+```bash
+./scripts/shared/import-to-kv.sh \
+  --vault-name "kv-appgw-xxx" \
+  --pfx-path "./appgw-cert.pfx" \
+  --pfx-password "yourpassword"
 ```
 
 Save the **secret URI** from the output.
 
 ### Step 5 — Re-deploy with HTTPS
 
+> **Important:** On Phase 2 redeploy, set `deployBackend=false` to avoid recreating VMs
+> (the cloud-init `customData` cannot be changed on existing VMs). Pass the existing
+> backend IPs so App Gateway keeps its backend pool.
+
 ```bash
+# Get your existing backend IPs first
+az vm list-ip-addresses -g rg-appgw-lab --query "[].virtualMachine.network.privateIpAddresses[0]" -o tsv
+
 az deployment group create \
   --resource-group rg-appgw-lab \
   --template-file bicep/main.bicep \
   --parameters \
     sshPublicKey="$(cat ~/.ssh/id_rsa.pub)" \
     enableHttps=true \
+    deployBackend=false \
+    existingBackendIps='["10.0.1.4","10.0.1.5"]' \
     keyVaultSecretId="https://kv-appgw-xxx.vault.azure.net/secrets/appgw-cert/<version>"
 ```
 
 App Gateway now serves HTTPS with a Let's Encrypt cert from Key Vault.
 
+> **Alternative — CLI-based HTTPS config:** If the Bicep redeploy fails (e.g., App Gateway enters
+> a Failed state due to RBAC propagation delays), you can configure HTTPS via CLI:
+> ```bash
+> KV_SECRET_ID="https://kv-appgw-xxx.vault.azure.net/secrets/appgw-cert/<version>"
+> az network application-gateway ssl-cert create -g rg-appgw-lab --gateway-name appgw-lab \
+>   --name appgw-cert --key-vault-secret-id "$KV_SECRET_ID"
+> az network application-gateway frontend-port create -g rg-appgw-lab --gateway-name appgw-lab \
+>   --name port-https --port 443
+> az network application-gateway http-listener create -g rg-appgw-lab --gateway-name appgw-lab \
+>   --name https-listener --frontend-port port-https --frontend-ip appGatewayPublicFrontendIP \
+>   --ssl-cert appgw-cert
+> az network application-gateway rule create -g rg-appgw-lab --gateway-name appgw-lab \
+>   --name https-rule --http-listener https-listener --address-pool appGatewayBackendPool \
+>   --http-settings appGatewayBackendHttpSettings --priority 100
+> ```
+
 ### Step 6 — Verify
 
 ```bash
-# From a machine that can reach the private IP
-curl -k https://10.0.0.10/
+# Get the public IP
+az network public-ip show -g rg-appgw-lab -n appgw-lab-pip --query ipAddress -o tsv
+
+# Test via public IP
+curl -k https://<App-Gateway-Public-IP>/
 # Should return "Backend VM 1" or "Backend VM 2" (round-robin)
+
+# Or create a DNS A record (e.g., yourdomain.com → public IP) and browse:
+curl -k https://yourdomain.com/
 ```
 
 ---
@@ -148,6 +185,8 @@ curl -k https://10.0.0.10/
 | `skuName` | `Standard_v2` | `Standard_v2` or `WAF_v2` |
 | `vmCount` | `2` | Number of backend VMs (1-4) |
 | `deployBastion` | `false` | Deploy Azure Bastion for VM management |
+| `deployBackend` | `true` | Deploy backend VMs (set `false` on Phase 2 redeploy to avoid customData conflict) |
+| `existingBackendIps` | `[]` | Existing backend VM IPs (required when `deployBackend=false`) |
 
 ---
 
@@ -155,12 +194,12 @@ curl -k https://10.0.0.10/
 
 | App Gateway Config | Challenge Type | Option |
 |---|---|---|
-| **Private IP only** (no public endpoint) | DNS-01 | **[Option B](#option-b--private-app-gateway-dns-01-challenge) (Recommended)** |
-| Public IP | HTTP-01 | [Option A](#option-a--public-app-gateway-http-01-challenge) |
-| Wildcard certificate (`*.yourdomain.com`) | DNS-01 only | [Option B](#option-b--private-app-gateway-dns-01-challenge) |
+| Public IP (internet testable) | DNS-01 | **[Option B](#option-b--dns-01-challenge-recommended) (Recommended)** |
+| Public IP | HTTP-01 | [Option A](#option-a--http-01-challenge) |
+| Wildcard certificate (`*.yourdomain.com`) | DNS-01 only | [Option B](#option-b--dns-01-challenge-recommended) |
 
-> **If your App Gateway uses a private IP only, skip straight to Option B.**
-> HTTP-01 requires Let's Encrypt to reach your domain over the public internet on port 80 — that's impossible with a private-only gateway.
+> This lab deploys an App Gateway with both public and private IPs, so both options work.
+> **Option B (DNS-01) is recommended** — no temporary port 80 listener required, and supports wildcard certs.
 
 ## Prerequisites (Both Options)
 
@@ -168,31 +207,38 @@ curl -k https://10.0.0.10/
 |---|---|
 | **Public DNS domain** | You must own a real domain (e.g., `yourdomain.com`). Let's Encrypt cannot issue certs for raw IPs or `*.azurewebsites.net`. Cheap domains are ~$10/year from Namecheap, Cloudflare, or GoDaddy. |
 
-> **Important:** Your DNS zone must be **publicly resolvable** — even for private App Gateway deployments (Option B). Let's Encrypt validates against public DNS resolvers. Azure Private DNS zones or on-prem internal-only DNS will **not** work for DNS-01 validation.
+> **Important:** Your DNS zone must be **publicly resolvable** — even for private-only App Gateway deployments. Let's Encrypt validates against public DNS resolvers. Azure Private DNS zones or on-prem internal-only DNS will **not** work for DNS-01 validation.
 | **Certbot** | Installed on any machine with internet access (laptop, Azure VM, Cloud Shell) |
 | **OpenSSL** | For PFX conversion |
 | **Azure CLI** | For uploading the certificate to App Gateway |
 
 ### Install Certbot
 
+All scripts in this repo are bash. Run them from **Azure Cloud Shell** (easiest — `az` + `openssl` pre-installed) or **WSL**.
+
 ```bash
-# Linux / WSL
+# Cloud Shell — install certbot (one-time setup)
+pip install --user certbot
+export PATH="$HOME/.local/bin:$PATH"
+export CERTBOT_DIR="$HOME/letsencrypt"
+
+# All certbot commands below use these flags to avoid /etc permission errors:
+#   --config-dir ~/letsencrypt --work-dir ~/letsencrypt/work --logs-dir ~/letsencrypt/logs
+
+# WSL / Linux
 sudo apt update && sudo apt install certbot -y
 
 # macOS
 brew install certbot
-
-# Windows (Chocolatey)
-choco install certbot -y
 ```
 
 ---
 
-## Option B — Private App Gateway (DNS-01 Challenge)
+## Option B — DNS-01 Challenge (Recommended)
 
-**Recommended for labs and enterprise patterns.**
+**Recommended for labs and enterprise deployments.**
 
-DNS-01 validates domain ownership via a DNS TXT record — no public IP, no port 80, no temporary listeners. This is the architecturally correct pattern for private Application Gateways.
+DNS-01 validates domain ownership via a DNS TXT record — no port 80 listener required, no temporary infrastructure. Works with any App Gateway configuration (public or private).
 
 ### Architecture
 
@@ -214,20 +260,18 @@ DNS-01 validates domain ownership via a DNS TXT record — no public IP, no port
            │
            ▼
 ┌────────────────────┐       ┌─────────────────────────┐
-│  Your Machine       │──────►│  Private App Gateway     │
-│  (certbot + az cli) │  PFX  │  VNet-internal only      │
-│                     │ upload│  No public IP             │
-└────────────────────┘       │  HTTPS Listener (443)     │
+│  Your Machine       │──────►│  App Gateway v2           │
+│  (certbot + az cli) │  PFX  │  Public + Private IP      │
+└────────────────────┘ upload│  HTTPS Listener (443)     │
                              └─────────────────────────┘
 ```
 
 **Key advantages:**
-- No public IP required
 - No port 80 listener required
 - No temporary infrastructure
 - Works with wildcard certs
 - Enterprise-ready pattern
-- More secure — zero public exposure during issuance
+- Works with any App Gateway frontend (public or private)
 
 > **Enterprise Note:** For production workloads, consider storing certificates in [Azure Key Vault](https://learn.microsoft.com/azure/key-vault/certificates/about-certificates) and referencing them from Application Gateway via Key Vault integration, rather than uploading PFX manually. This enables automated rotation and centralized certificate management.
 
@@ -248,9 +292,10 @@ This A record is for **client resolution only** — it is NOT required for DNS-0
 #### Step 2 — Request Certificate with DNS-01
 
 ```bash
-sudo certbot certonly \
+certbot certonly \
   --manual \
   --preferred-challenges dns \
+  --config-dir ~/letsencrypt --work-dir ~/letsencrypt/work --logs-dir ~/letsencrypt/logs \
   -d appgw-lab.yourdomain.com
 ```
 
@@ -289,17 +334,17 @@ Wait for DNS propagation (typically 30-60 seconds for Azure DNS), then press Ent
 # Convert PEM → PFX
 openssl pkcs12 -export \
   -out appgw-cert.pfx \
-  -inkey /etc/letsencrypt/live/appgw-lab.yourdomain.com/privkey.pem \
-  -in /etc/letsencrypt/live/appgw-lab.yourdomain.com/fullchain.pem
+  -inkey ~/letsencrypt/live/appgw-lab.yourdomain.com/privkey.pem \
+  -in ~/letsencrypt/live/appgw-lab.yourdomain.com/fullchain.pem
 ```
 
-```powershell
+```bash
 # Upload to App Gateway
-./scripts/shared/upload-cert.ps1 `
-  -ResourceGroupName "myRG" `
-  -AppGatewayName "myAppGW" `
-  -PfxPath "./appgw-cert.pfx" `
-  -PfxPassword "yourpassword"
+./scripts/shared/upload-cert.sh \
+  --resource-group "myRG" \
+  --gateway-name "myAppGW" \
+  --pfx-path "./appgw-cert.pfx" \
+  --pfx-password "yourpassword"
 ```
 
 #### Step 5 — Clean Up TXT Record
@@ -316,13 +361,13 @@ az network dns record-set txt remove-record \
 
 For a production-grade, one-command experience:
 
-```powershell
-./scripts/option-b-private/azure-dns-certbot.ps1 `
-  -Domain "appgw-lab.contoso.com" `
-  -DnsZoneName "contoso.com" `
-  -DnsResourceGroupName "dns-rg" `
-  -AppGatewayName "myAppGW" `
-  -AppGatewayResourceGroupName "appgw-rg"
+```bash
+./scripts/option-b-private/azure-dns-certbot.sh \
+  -d appgw-lab.contoso.com \
+  --dns-zone contoso.com \
+  --dns-rg dns-rg \
+  --appgw-name myAppGW \
+  --appgw-rg appgw-rg
 ```
 
 This script:
@@ -333,7 +378,7 @@ This script:
 5. Uploads to App Gateway
 6. Cleans up the TXT record
 
-Add `--Staging` for testing without hitting rate limits.
+Add `--staging` for testing without hitting rate limits.
 
 ### Using the Bash Script
 
@@ -345,7 +390,7 @@ This runs certbot in interactive DNS-01 mode — you'll manually add the TXT rec
 
 ---
 
-## Option A — Public App Gateway (HTTP-01 Challenge)
+## Option A — HTTP-01 Challenge
 
 Use this if your App Gateway has a **public IP address**. Let's Encrypt validates ownership by connecting to `http://yourdomain/.well-known/acme-challenge/` over the public internet.
 
@@ -364,7 +409,8 @@ Use this if your App Gateway has a **public IP address**. Let's Encrypt validate
                                 → App GW Public IP
 ```
 
-> **Limitation:** This does NOT work for private-only App Gateways. Use [Option B](#option-b--private-app-gateway-dns-01-challenge) instead.
+> **Limitation:** HTTP-01 requires a public IP on the App Gateway (this lab includes one). For environments
+> without a public IP, use [Option B](#option-b--dns-01-challenge-recommended) instead.
 
 ### Quick Start
 
@@ -380,15 +426,18 @@ Verify: `nslookup appgw-lab.yourdomain.com`
 
 Let's Encrypt must reach port 80 on your domain.
 
-```powershell
-./scripts/option-a-public/setup-http-listener.ps1 -ResourceGroupName "myRG" -AppGatewayName "myAppGW"
+```bash
+./scripts/option-a-public/setup-http-listener.sh \
+  --resource-group "myRG" --gateway-name "myAppGW"
 ```
 
 #### Step 3 — Obtain the Certificate
 
 ```bash
 # Standalone mode
-sudo certbot certonly --standalone -d appgw-lab.yourdomain.com
+certbot certonly --standalone \
+  --config-dir ~/letsencrypt --work-dir ~/letsencrypt/work --logs-dir ~/letsencrypt/logs \
+  -d appgw-lab.yourdomain.com
 
 # Or use the included script
 ./scripts/option-a-public/get-certificate.sh -d appgw-lab.yourdomain.com
@@ -397,7 +446,7 @@ sudo certbot certonly --standalone -d appgw-lab.yourdomain.com
 Certificate files:
 
 ```
-/etc/letsencrypt/live/appgw-lab.yourdomain.com/
+~/letsencrypt/live/appgw-lab.yourdomain.com/
 ├── fullchain.pem
 └── privkey.pem
 ```
@@ -407,11 +456,11 @@ Certificate files:
 ```bash
 openssl pkcs12 -export \
   -out appgw-cert.pfx \
-  -inkey /etc/letsencrypt/live/appgw-lab.yourdomain.com/privkey.pem \
-  -in /etc/letsencrypt/live/appgw-lab.yourdomain.com/fullchain.pem
+  -inkey ~/letsencrypt/live/appgw-lab.yourdomain.com/privkey.pem \
+  -in ~/letsencrypt/live/appgw-lab.yourdomain.com/fullchain.pem
 ```
 
-Or: `./scripts/shared/convert-to-pfx.ps1 -Domain "appgw-lab.yourdomain.com"`
+Or: `./scripts/shared/convert-to-pfx.sh -d appgw-lab.yourdomain.com`
 
 #### Step 5 — Upload to Application Gateway
 
@@ -419,18 +468,19 @@ Or: `./scripts/shared/convert-to-pfx.ps1 -Domain "appgw-lab.yourdomain.com"`
 1. Application Gateway → **Listeners** → HTTPS → Upload PFX
 
 **CLI:**
-```powershell
-./scripts/shared/upload-cert.ps1 `
-  -ResourceGroupName "myRG" `
-  -AppGatewayName "myAppGW" `
-  -PfxPath "./appgw-cert.pfx" `
-  -PfxPassword "yourpassword"
+```bash
+./scripts/shared/upload-cert.sh \
+  --resource-group "myRG" \
+  --gateway-name "myAppGW" \
+  --pfx-path "./appgw-cert.pfx" \
+  --pfx-password "yourpassword"
 ```
 
 #### Step 6 — Clean Up HTTP Listener
 
-```powershell
-./scripts/option-a-public/cleanup-http-listener.ps1 -ResourceGroupName "myRG" -AppGatewayName "myAppGW"
+```bash
+./scripts/option-a-public/cleanup-http-listener.sh \
+  --resource-group "myRG" --gateway-name "myAppGW"
 ```
 
 ---
@@ -517,24 +567,24 @@ Let's Encrypt certificates are valid for **90 days**.
 
 | Script | Purpose |
 |---|---|
-| `scripts/shared/convert-to-pfx.ps1` | Convert PEM to PFX format |
-| `scripts/shared/upload-cert.ps1` | Upload PFX cert to Application Gateway (direct PFX method) |
-| `scripts/shared/import-to-kv.ps1` | Import PFX into Key Vault and output the secret URI |
+| `scripts/shared/convert-to-pfx.sh` | Convert PEM to PFX format |
+| `scripts/shared/upload-cert.sh` | Upload PFX cert to Application Gateway (direct PFX method) |
+| `scripts/shared/import-to-kv.sh` | Import PFX into Key Vault and output the secret URI |
 
 ### Option A — Public (HTTP-01)
 
 | Script | Purpose |
 |---|---|
 | `scripts/option-a-public/get-certificate.sh` | Obtain cert via certbot standalone (HTTP-01) |
-| `scripts/option-a-public/setup-http-listener.ps1` | Add temporary HTTP listener for ACME challenge |
-| `scripts/option-a-public/cleanup-http-listener.ps1` | Remove temporary HTTP listener |
+| `scripts/option-a-public/setup-http-listener.sh` | Add temporary HTTP listener for ACME challenge |
+| `scripts/option-a-public/cleanup-http-listener.sh` | Remove temporary HTTP listener |
 
 ### Option B — Private (DNS-01)
 
 | Script | Purpose |
 |---|---|
 | `scripts/option-b-private/get-certificate-dns01.sh` | Obtain cert via interactive DNS-01 challenge |
-| `scripts/option-b-private/azure-dns-certbot.ps1` | **Fully automated:** Azure DNS + certbot + PFX + upload |
+| `scripts/option-b-private/azure-dns-certbot.sh` | **Fully automated:** Azure DNS + certbot + PFX + upload |
 
 ### Bicep Modules
 
@@ -545,7 +595,7 @@ Let's Encrypt certificates are valid for **90 days**.
 | `bicep/network.bicep` | VNet with App GW, backend, and optional Bastion subnets + NSGs |
 | `bicep/keyvault.bicep` | Key Vault with RBAC role assignment for managed identity |
 | `bicep/backend.bicep` | Linux VMs with NGINX (no public IPs, cloud-init provisioned) |
-| `bicep/appgw.bicep` | App Gateway v2 — private IP, Key Vault TLS, autoscale, health probes |
+| `bicep/appgw.bicep` | App Gateway v2 — public + private IP, Key Vault TLS, autoscale, health probes |
 
 ## Troubleshooting
 
@@ -558,15 +608,17 @@ Let's Encrypt certificates are valid for **90 days**.
 | PFX upload fails | Ensure the password matches and PFX includes the full chain |
 | Let's Encrypt rate limit | Use `--staging` flag for testing without rate limits |
 | Wildcard cert needed | Must use DNS-01 (Option B). HTTP-01 cannot issue wildcards. |
+| **Phase 2 redeploy fails** (customData conflict) | Set `deployBackend=false` and pass `existingBackendIps='["10.0.1.4","10.0.1.5"]'` to skip VM redeployment |
+| **App Gateway stuck in Failed state** | Run `az network application-gateway stop -g rg-appgw-lab -n appgw-lab` then `az network application-gateway start -g rg-appgw-lab -n appgw-lab` to reset |
+| **Key Vault ForbiddenByRbac** (for your user) | Your user needs `Key Vault Certificates Officer` to import certs: `az role assignment create --role "Key Vault Certificates Officer" --assignee <your-oid> --scope <kv-resource-id>` |
+| **Namecheap multi-level TXT records** | Namecheap cannot create dotted host names like `_acme-challenge.appgw-lab`. Use the root domain or a single-level subdomain instead |
+| **Cloud Shell: certbot not found** | Install via `pip install --user certbot` and add `$HOME/.local/bin` to PATH |
+| **Cloud Shell: SSH key needed** | Generate with `ssh-keygen -t rsa -b 4096` before deploying |
 
 ## Useful Links
 
 - [Let's Encrypt Documentation](https://letsencrypt.org/docs/)
-- [Certbot Instructions](https://certbot.eff.org/)
 - [ACME DNS-01 Challenge](https://letsencrypt.org/docs/challenge-types/#dns-01-challenge)
 - [Azure App Gateway TLS Overview](https://learn.microsoft.com/azure/application-gateway/ssl-overview)
-- [Azure DNS Quickstart](https://learn.microsoft.com/azure/dns/dns-getstarted-portal)
-- [App Gateway Private IP Configuration](https://learn.microsoft.com/azure/application-gateway/application-gateway-private-deployment)
 - [App Gateway Key Vault Integration](https://learn.microsoft.com/azure/application-gateway/key-vault-certs)
 - [Azure Key Vault RBAC](https://learn.microsoft.com/azure/key-vault/general/rbac-guide)
-- [Bicep Documentation](https://learn.microsoft.com/azure/azure-resource-manager/bicep/overview)

@@ -114,6 +114,19 @@ resource nsgAppGateway 'Microsoft.Network/networkSecurityGroups@2023-11-01' = {
           destinationPortRange: '443'
         }
       }
+      {
+        name: 'AllowHTTP'
+        properties: {
+          priority: 120
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourceAddressPrefix: '*'
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRange: '80'
+        }
+      }
     ]
   }
 }
@@ -129,6 +142,14 @@ var subnets = union(
         networkSecurityGroup: {
           id: nsgAppGateway.id
         }
+        delegations: [
+          {
+            name: 'delegation-appgw'
+            properties: {
+              serviceName: 'Microsoft.Network/applicationGateways'
+            }
+          }
+        ]
       }
     }
     {

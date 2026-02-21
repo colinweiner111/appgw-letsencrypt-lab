@@ -6,7 +6,7 @@
 //   2. Virtual network (App GW subnet + backend subnet + optional Bastion)
 //   3. Azure Key Vault with RBAC for the managed identity
 //   4. Backend VMs (Linux + NGINX, no public IPs)
-//   5. Application Gateway v2 (private IP, Key Vault TLS)
+//   5. Application Gateway v2 (public + private IP, Key Vault TLS)
 //
 // Usage:
 //   az deployment group create \
@@ -39,6 +39,7 @@ param keyVaultName string = 'kv-appgw-${uniqueString(resourceGroup().id)}'
 @description('Enable HTTPS listener with Key Vault cert')
 param enableHttps bool = false
 
+@secure()
 @description('Key Vault secret ID for SSL cert (required if enableHttps=true)')
 param keyVaultSecretId string = ''
 
@@ -56,6 +57,12 @@ param vmCount int = 2
 
 @description('Deploy Azure Bastion for secure VM access')
 param deployBastion bool = false
+
+@description('Deploy backend VMs (set false on Phase 2 redeploy to avoid customData conflict)')
+param deployBackend bool = true
+
+@description('Existing backend IPs (required when deployBackend=false)')
+param existingBackendIps array = []
 
 @description('Tags applied to all resources')
 param tags object = {
@@ -98,7 +105,7 @@ module keyVault 'keyvault.bicep' = {
 
 // ─── Module 4: Backend VMs ──────────────────────────────────────
 
-module backend 'backend.bicep' = {
+module backend 'backend.bicep' = if (deployBackend) {
   name: 'deploy-backend'
   params: {
     location: location
@@ -109,6 +116,9 @@ module backend 'backend.bicep' = {
   }
 }
 
+// Resolve backend IPs from module output or parameter
+var resolvedBackendIps = deployBackend ? backend.outputs.backendPrivateIps : existingBackendIps
+
 // ─── Module 5: Application Gateway ──────────────────────────────
 
 module appGateway 'appgw.bicep' = {
@@ -117,7 +127,7 @@ module appGateway 'appgw.bicep' = {
     location: location
     subnetId: network.outputs.appGatewaySubnetId
     identityId: identity.outputs.identityId
-    backendIpAddresses: backend.outputs.backendPrivateIps
+    backendIpAddresses: resolvedBackendIps
     skuName: skuName
     enableHttps: enableHttps
     keyVaultSecretId: keyVaultSecretId
@@ -126,6 +136,9 @@ module appGateway 'appgw.bicep' = {
 }
 
 // ─── Outputs ────────────────────────────────────────────────────
+
+@description('Application Gateway public IP address')
+output appGatewayPublicIp string = appGateway.outputs.publicIp
 
 @description('Application Gateway private IP address')
 output appGatewayPrivateIp string = appGateway.outputs.privateIp
@@ -140,7 +153,7 @@ output keyVaultUri string = keyVault.outputs.keyVaultUri
 output identityPrincipalId string = identity.outputs.principalId
 
 @description('Backend VM private IPs')
-output backendVmIps array = backend.outputs.backendPrivateIps
+output backendVmIps array = resolvedBackendIps
 
 @description('Next step instructions')
 output nextSteps string = enableHttps

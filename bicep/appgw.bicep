@@ -1,8 +1,8 @@
 // appgw.bicep
-// Application Gateway v2 — private IP only, Key Vault TLS integration
+// Application Gateway v2 — public + private frontend, Key Vault TLS integration
 //
 // Design decisions:
-// - Private frontend IP only (no public IP)
+// - Public IP for internet-facing HTTPS + private IP for VNet-internal access
 // - User-assigned managed identity for Key Vault access
 // - SSL cert referenced via Key Vault secret URI
 // - Explicit health probe (never rely on defaults)
@@ -21,6 +21,7 @@ param subnetId string
 @description('User-assigned managed identity resource ID')
 param identityId string
 
+@secure()
 @description('Key Vault secret ID for the SSL certificate (full URI with version)')
 param keyVaultSecretId string = ''
 
@@ -61,6 +62,20 @@ var backendAddresses = [
   }
 ]
 
+// ─── Public IP Address ──────────────────────────────────────────
+
+resource publicIP 'Microsoft.Network/publicIPAddresses@2023-11-01' = {
+  name: '${appGatewayName}-pip'
+  location: location
+  tags: tags
+  sku: {
+    name: 'Standard'
+  }
+  properties: {
+    publicIPAllocationMethod: 'Static'
+  }
+}
+
 // ─── Application Gateway ────────────────────────────────────────
 
 resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = {
@@ -93,10 +108,18 @@ resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = {
       }
     ]
 
-    // ── Frontend IP: private only ─────────────────────────────
+    // ── Frontend IPs: public + private ────────────────────────
     frontendIPConfigurations: [
       {
-        name: 'appGatewayFrontendIP'
+        name: 'appGatewayPublicFrontendIP'
+        properties: {
+          publicIPAddress: {
+            id: publicIP.id
+          }
+        }
+      }
+      {
+        name: 'appGatewayPrivateFrontendIP'
         properties: {
           privateIPAllocationMethod: 'Static'
           privateIPAddress: privateIpAddress
@@ -142,8 +165,7 @@ resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = {
       : []
 
     // ── Listeners ─────────────────────────────────────────────
-    httpListeners: union(
-      enableHttps
+    httpListeners: enableHttps
         ? [
             {
               name: 'https-listener'
@@ -152,7 +174,7 @@ resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = {
                   id: resourceId(
                     'Microsoft.Network/applicationGateways/frontendIPConfigurations',
                     appGatewayName,
-                    'appGatewayFrontendIP'
+                    'appGatewayPublicFrontendIP'
                   )
                 }
                 frontendPort: {
@@ -179,7 +201,7 @@ resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = {
                   id: resourceId(
                     'Microsoft.Network/applicationGateways/frontendIPConfigurations',
                     appGatewayName,
-                    'appGatewayFrontendIP'
+                    'appGatewayPublicFrontendIP'
                   )
                 }
                 frontendPort: {
@@ -201,7 +223,7 @@ resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = {
                   id: resourceId(
                     'Microsoft.Network/applicationGateways/frontendIPConfigurations',
                     appGatewayName,
-                    'appGatewayFrontendIP'
+                    'appGatewayPublicFrontendIP'
                   )
                 }
                 frontendPort: {
@@ -215,7 +237,6 @@ resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = {
               }
             }
           ]
-    )
 
     // ── Backend pool ──────────────────────────────────────────
     backendAddressPools: [
@@ -269,8 +290,7 @@ resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = {
     ]
 
     // ── Routing rules ─────────────────────────────────────────
-    requestRoutingRules: union(
-      enableHttps
+    requestRoutingRules: enableHttps
         ? [
             {
               name: 'https-rule'
@@ -332,7 +352,7 @@ resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = {
                   id: resourceId(
                     'Microsoft.Network/applicationGateways/httpListeners',
                     appGatewayName,
-                    'http-rule'
+                    'http-listener'
                   )
                 }
                 backendAddressPool: {
@@ -352,7 +372,6 @@ resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = {
               }
             }
           ]
-    )
 
     // ── Redirect configuration (HTTP → HTTPS) ────────────────
     redirectConfigurations: enableHttps
@@ -381,6 +400,12 @@ resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = {
 
 @description('Resource ID of the Application Gateway')
 output appGatewayId string = appGateway.id
+
+@description('Public IP address')
+output publicIp string = publicIP.properties.ipAddress
+
+@description('Public IP resource ID')
+output publicIpId string = publicIP.id
 
 @description('Private frontend IP address')
 output privateIp string = privateIpAddress

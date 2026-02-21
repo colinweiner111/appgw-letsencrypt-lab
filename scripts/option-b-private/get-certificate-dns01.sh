@@ -72,7 +72,8 @@ if ! command -v certbot &> /dev/null; then
 fi
 
 # Build certbot command for DNS-01
-CERTBOT_CMD="sudo certbot certonly --manual --preferred-challenges dns -d $DOMAIN"
+CERTBOT_DIR="${CERTBOT_DIR:-$HOME/letsencrypt}"
+CERTBOT_CMD="certbot certonly --manual --preferred-challenges dns --config-dir $CERTBOT_DIR --work-dir $CERTBOT_DIR/work --logs-dir $CERTBOT_DIR/logs -d $DOMAIN"
 
 if [ -n "$EMAIL" ]; then
     CERTBOT_CMD="$CERTBOT_CMD --email $EMAIL --no-eff-email"
@@ -109,7 +110,7 @@ echo ""
 
 eval "$CERTBOT_CMD"
 
-CERT_DIR="/etc/letsencrypt/live/$DOMAIN"
+CERT_DIR="$CERTBOT_DIR/live/$DOMAIN"
 
 echo ""
 echo "========================================="

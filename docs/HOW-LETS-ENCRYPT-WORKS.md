@@ -6,7 +6,6 @@ A beginner-friendly guide to Let's Encrypt, ACME challenges, and how they apply 
 
 - [The Problem](#the-problem)
 - [What Is Let's Encrypt?](#what-is-lets-encrypt)
-- [How TLS Certificates Normally Work](#how-tls-certificates-normally-work)
 - [The ACME Protocol](#the-acme-protocol)
 - [Challenge Types](#challenge-types)
 - [What Is Certbot?](#what-is-certbot)
@@ -47,26 +46,6 @@ Key facts:
 
 ---
 
-## How TLS Certificates Normally Work
-
-```
-1. You (the server admin) generate a key pair:
-   - Private key  →  stays on your server, never shared
-   - Public key   →  embedded in the certificate
-
-2. A Certificate Authority (CA) signs your public key:
-   "I, the CA, verify that this public key belongs to appgw-lab.yourdomain.com"
-
-3. When a browser connects:
-   Browser: "Show me your certificate."
-   Server:  sends certificate (signed by CA)
-   Browser: "I trust this CA → I trust this certificate → connection is secure."
-```
-
-The magic is in step 2: the CA's signature. Browsers ship with a list of ~150 trusted root CAs. If your cert is signed by one of them (or by an intermediate that chains up to one), the browser trusts it automatically.
-
----
-
 ## The ACME Protocol
 
 Let's Encrypt doesn't have humans reviewing certificate requests. Instead, it uses a protocol called **ACME** (Automatic Certificate Management Environment) to verify that you control a domain.
@@ -98,6 +77,8 @@ The flow:
        │                                           │
 ```
 
+Certbot automatically generates the CSR (Certificate Signing Request) and key pair locally before contacting the ACME server — you never handle the CSR yourself.
+
 The critical part is step 3: **how you prove domain control.** That's where challenge types come in.
 
 ---
@@ -122,7 +103,7 @@ How it works:
 | Works with any DNS provider | Cannot issue wildcard certs |
 | Easy to automate | Doesn't work for private-only servers |
 
-**For App Gateway:** HTTP-01 only works if your App Gateway has a **public IP** and port 80 is reachable from the internet. If your App Gateway is private-only, HTTP-01 is impossible — use DNS-01 instead.
+**For App Gateway:** HTTP-01 works when your App Gateway has a **public IP** and port 80 is reachable from the internet. This lab deploys a public IP, so HTTP-01 is an option. However, DNS-01 is still recommended because it doesn't require temporarily opening port 80.
 
 ### DNS-01 Challenge
 
@@ -142,7 +123,11 @@ How it works:
 | Supports wildcard certs | DNS propagation can add delay |
 | More secure (no public exposure) | |
 
-**For App Gateway:** DNS-01 is the **recommended approach** for private App Gateways. Your App Gateway never needs to be reachable from the internet. You just need the ability to create a TXT record in your public DNS zone.
+**For App Gateway:** DNS-01 is the **recommended approach** for App Gateway TLS labs. Your App Gateway doesn't need to be reachable from the internet during certificate issuance — you just need the ability to create a TXT record in your public DNS zone.
+
+> **Critical:** DNS-01 requires the DNS zone to be **publicly resolvable**. Azure Private DNS zones and on-prem internal-only DNS will **not** work — Let's Encrypt validates by querying public DNS resolvers. Even if your App Gateway is private, the `_acme-challenge` TXT record must live in a public zone.
+
+> **CAA Records:** If your domain uses [CAA records](https://letsencrypt.org/docs/caa/), ensure they allow issuance by `letsencrypt.org`. Otherwise the challenge will succeed but certificate issuance will be denied.
 
 ### Side-by-Side
 
@@ -182,14 +167,17 @@ Certbot runs on **Linux, macOS, and Windows**. For this lab on Windows, you have
 
 > **Important:** Certbot just issues the certificate. It doesn't upload it to App Gateway — that's a separate step using Azure CLI or the portal. Certbot doesn't know or care about Azure.
 
+> **No signup required:** On first run, Certbot automatically creates and registers an ACME account with Let's Encrypt. You don't need to create an account or sign up anywhere — just run the command.
+
 ### Running Certbot
 
-For DNS-01 (the common case with private App Gateway):
+For DNS-01 (the recommended approach for App Gateway):
 
 ```bash
-sudo certbot certonly \
+certbot certonly \
   --manual \
   --preferred-challenges dns \
+  --config-dir ~/letsencrypt --work-dir ~/letsencrypt/work --logs-dir ~/letsencrypt/logs \
   -d appgw-lab.yourdomain.com
 ```
 
@@ -205,10 +193,10 @@ Certbot will pause and ask you to create a TXT record. Once you do, press Enter 
 
 ## The Certificate Files
 
-After certbot succeeds, it saves files to `/etc/letsencrypt/live/yourdomain.com/`:
+After certbot succeeds, it saves files to `~/letsencrypt/live/yourdomain.com/`:
 
 ```
-/etc/letsencrypt/live/appgw-lab.yourdomain.com/
+~/letsencrypt/live/appgw-lab.yourdomain.com/
 ├── privkey.pem        ← Your private key (never share this)
 ├── cert.pem           ← Your certificate only (leaf cert)
 ├── chain.pem          ← The intermediate CA certificate
@@ -280,6 +268,8 @@ You'll be prompted for a password — this protects the PFX file since it contai
 
 > **Why PFX?** It's a Windows/Azure convention. Linux typically uses separate PEM files. Azure services like App Gateway and Key Vault expect the bundled PFX format. The `openssl pkcs12` command bridges the two worlds.
 
+> **Azure Tip:** Application Gateway v2 supports [Key Vault integration](https://learn.microsoft.com/azure/application-gateway/key-vault-certs) — instead of uploading PFX directly, you import it to Key Vault and App Gateway retrieves it automatically via a user-assigned managed identity. This is the pattern used in this lab's Bicep infrastructure.
+
 ---
 
 ## Certificate Lifetime and Renewal
@@ -300,7 +290,8 @@ For this lab, manual renewal is fine — just re-run the steps. For longer-lived
 | Cron job + certbot renew | Medium | Linux VMs running certbot |
 | Azure Automation runbook | Medium | Scheduled Azure-native renewal |
 | GitHub Actions workflow | Medium | CI/CD-integrated renewal |
-| Azure Key Vault + App Service cert | High | Production (not Let's Encrypt) |
+| Azure Key Vault + Let's Encrypt | Medium | Import PFX to KV, App GW pulls via managed identity |
+| Azure App Service Managed Certificates | High | Production; built-in auto-renewal but not Let's Encrypt |
 
 ---
 
