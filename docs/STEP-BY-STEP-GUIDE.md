@@ -205,37 +205,14 @@ Replace:
 
 > **Common mistake:** Don't use the full name `_acme-challenge.appgw-lab.yourdomain.com` in `--record-set-name`. Azure DNS wants just the relative part: `_acme-challenge.appgw-lab`. It appends the zone name automatically.
 
-### If your DNS is in Cloudflare
+### Other DNS Providers
 
-1. Log into [Cloudflare Dashboard](https://dash.cloudflare.com)
-2. Select your domain
-3. Go to **DNS** → **Records**
-4. Click **Add Record**
-5. Type: **TXT**
-6. Name: `_acme-challenge.appgw-lab`
-7. Content: paste the validation string from certbot
-8. TTL: **Auto** (or 1 minute)
-9. Click **Save**
-
-### If your DNS is in GoDaddy
-
-1. Log into [GoDaddy](https://dcc.godaddy.com)
-2. Go to **My Products** → **DNS** for your domain
-3. Click **Add New Record**
-4. Type: **TXT**
-5. Name: `_acme-challenge.appgw-lab`
-6. Value: paste the validation string
-7. TTL: **1/2 Hour**
-8. Click **Save**
-
-### If your DNS is somewhere else
-
-The process is the same for any provider:
+The process is the same regardless of provider (Cloudflare, GoDaddy, Namecheap, etc.):
 1. Log into your DNS management panel
 2. Add a **TXT** record
-3. Name/Host: `_acme-challenge.appgw-lab.yourdomain.com` (some providers want the full name, some want just the relative part — check their docs)
-4. Value: the string from certbot
-5. Save
+3. Name/Host: `_acme-challenge.appgw-lab` — some providers want just the relative part, others want the full name including the zone (`_acme-challenge.appgw-lab.yourdomain.com`). Check your provider's docs.
+4. Value: the exact string certbot displayed
+5. Save and wait for propagation (typically 30 seconds to 30 minutes depending on provider)
 
 > **⚠️ Namecheap users:** Namecheap cannot create dotted host names like `_acme-challenge.appgw-lab`.
 > You have two options:
