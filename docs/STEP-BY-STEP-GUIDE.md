@@ -64,11 +64,14 @@ Write down your **Key Vault name** and **public IP** — you'll need them later.
 
 ### Pick your domain name
 
-Throughout this guide, we'll use `appgw-lab.yourdomain.com` as an example. Replace it with your actual domain. For example, if you own `contoso.com`, you might use:
+Throughout this guide, we'll use `acme.com` as an example domain with a **multi-domain SAN certificate** covering:
 
-```
-appgw-lab.contoso.com
-```
+- `acme.com` (root domain)
+- `www.acme.com`
+- `api.acme.com`
+- `app.acme.com`
+
+Replace these with your actual domain and subdomains. A SAN (Subject Alternative Name) certificate covers multiple domain names in a single cert — perfect for serving a root domain and its subdomains from the same App Gateway.
 
 ---
 
@@ -121,7 +124,9 @@ If you don't have it:
 
 ## 3. Request the Certificate
 
-Now we ask Let's Encrypt for a certificate. This uses **DNS-01 challenge** — meaning you'll prove you own the domain by creating a DNS record (no public IP needed).
+Now we ask Let's Encrypt for a certificate. This uses **DNS-01 challenge** — meaning you'll prove you own the domain by creating DNS records (no public IP needed).
+
+This example requests a **multi-domain SAN certificate** covering four domains in a single cert. You can use fewer `-d` flags if you only need one domain.
 
 > **Staging tip:** If this is your first time, add `--staging` to the command below. This uses Let's Encrypt's test server (no rate limits, but the cert won't be trusted by browsers). Remove `--staging` when you're ready for a real cert.
 
@@ -132,10 +137,15 @@ certbot certonly \
   --manual \
   --preferred-challenges dns \
   --config-dir ~/letsencrypt --work-dir ~/letsencrypt/work --logs-dir ~/letsencrypt/logs \
-  -d appgw-lab.yourdomain.com
+  -d acme.com \
+  -d www.acme.com \
+  -d api.acme.com \
+  -d app.acme.com
 ```
 
-Replace `appgw-lab.yourdomain.com` with your actual domain.
+Replace the `-d` values with your actual domains. You can use as many `-d` flags as you need — each one adds a SAN entry to the certificate.
+
+> **Single domain?** Just use one `-d` flag: `-d acme.com`
 
 > **No signup required:** On first run, Certbot automatically creates and registers an ACME account with Let's Encrypt. You don't need to create an account anywhere.
 
@@ -155,13 +165,13 @@ Please read the Terms of Service at https://letsencrypt.org/documents/LE-SA-v1.4
 (A)gree/(C)ancel: A
 ```
 
-Then **this is the critical part** — certbot will display something like:
+Then **this is the critical part** — certbot will prompt you **once per domain**. For a 4-domain SAN cert, you'll see 4 prompts like this:
 
 ```
 - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 Please deploy a DNS TXT record under the name:
 
-  _acme-challenge.appgw-lab.yourdomain.com
+  _acme-challenge.acme.com
 
 with the following value:
 
@@ -174,67 +184,110 @@ DNS provider, this may take a while.
 Press Enter to Continue
 ```
 
-**⚠️ DO NOT press Enter yet!** You need to create that DNS record first. Leave this terminal open and go to Step 4.
+Then after you press Enter, it will ask for the next domain:
+
+```
+Please deploy a DNS TXT record under the name:
+
+  _acme-challenge.www.acme.com
+
+with the following value:
+
+  B7h2j4mN9pQ1rT3uW5xY8zA0bC6dE4fG
+```
+
+...and so on for `api.acme.com` and `app.acme.com`.
+
+**⚠️ DO NOT press Enter yet!** Create each TXT record as certbot requests it, verify propagation, then press Enter to get the next prompt. See Step 4.
 
 ---
 
 ## 4. Create the DNS TXT Record
 
-Certbot is waiting. You now need to create a TXT record in your DNS provider. You'll need two values from the certbot output:
+Certbot is waiting. You now need to create a TXT record in your DNS provider for **each domain** in the SAN cert. Certbot prompts you one at a time, so you'll create each record, verify it, then press Enter for the next one.
 
-- **Record name:** `_acme-challenge.appgw-lab` (the part before your zone name)
-- **Record value:** The random string certbot displayed (e.g., `A3f7k9xB2mQ4pR8tY1wZ6vN0cD5eH3jL`)
+You'll need two values from the certbot output:
+
+- **Record name:** `_acme-challenge` (for the root domain) or `_acme-challenge.www` (for subdomains)
+- **Record value:** The random string certbot displayed (different for each domain)
+
+> **Key concept:** All TXT records go in the same DNS zone (e.g., `acme.com`). For subdomains like `www.acme.com`, the TXT record name is `_acme-challenge.www` within the `acme.com` zone.
 
 ### If your DNS is in Azure DNS
 
-Open a **new terminal** (leave certbot running in the other one):
+Open a **new terminal** (leave certbot running in the other one). Create a TXT record for each domain as certbot requests it:
 
 ```bash
+# For acme.com (root domain)
 az network dns record-set txt add-record \
   --resource-group "your-dns-resource-group" \
-  --zone-name "yourdomain.com" \
-  --record-set-name "_acme-challenge.appgw-lab" \
+  --zone-name "acme.com" \
+  --record-set-name "_acme-challenge" \
   --value "A3f7k9xB2mQ4pR8tY1wZ6vN0cD5eH3jL"
+
+# For www.acme.com
+az network dns record-set txt add-record \
+  --resource-group "your-dns-resource-group" \
+  --zone-name "acme.com" \
+  --record-set-name "_acme-challenge.www" \
+  --value "B7h2j4mN9pQ1rT3uW5xY8zA0bC6dE4fG"
+
+# For api.acme.com
+az network dns record-set txt add-record \
+  --resource-group "your-dns-resource-group" \
+  --zone-name "acme.com" \
+  --record-set-name "_acme-challenge.api" \
+  --value "<value-from-certbot>"
+
+# For app.acme.com
+az network dns record-set txt add-record \
+  --resource-group "your-dns-resource-group" \
+  --zone-name "acme.com" \
+  --record-set-name "_acme-challenge.app" \
+  --value "<value-from-certbot>"
 ```
 
 Replace:
 - `your-dns-resource-group` → the resource group containing your Azure DNS zone
-- `yourdomain.com` → your actual domain
-- `_acme-challenge.appgw-lab` → the relative name (do NOT include the zone name)
-- The `--value` → the exact string certbot gave you
+- `acme.com` → your actual domain
+- Each `--value` → the exact string certbot gave you for that domain
 
-> **Common mistake:** Don't use the full name `_acme-challenge.appgw-lab.yourdomain.com` in `--record-set-name`. Azure DNS wants just the relative part: `_acme-challenge.appgw-lab`. It appends the zone name automatically.
+> **Common mistake:** Don't include the zone name in `--record-set-name`. Azure DNS appends it automatically. Use `_acme-challenge.www`, not `_acme-challenge.www.acme.com`.
 
 ### Other DNS Providers
 
 The process is the same regardless of provider (Cloudflare, GoDaddy, Namecheap, etc.):
 1. Log into your DNS management panel
-2. Add a **TXT** record
-3. Name/Host: `_acme-challenge.appgw-lab` — some providers want just the relative part, others want the full name including the zone (`_acme-challenge.appgw-lab.yourdomain.com`). Check your provider's docs.
-4. Value: the exact string certbot displayed
-5. Save and wait for propagation (typically 30 seconds to 30 minutes depending on provider)
+2. Add a **TXT** record for each domain certbot requests
+3. For the root domain: Name/Host = `_acme-challenge`
+4. For subdomains: Name/Host = `_acme-challenge.www`, `_acme-challenge.api`, etc.
+5. Value: the exact string certbot displayed for that domain
+6. Save and wait for propagation (typically 30 seconds to 30 minutes depending on provider)
 
-> **⚠️ Namecheap users:** Namecheap cannot create dotted host names like `_acme-challenge.appgw-lab`.
-> You have two options:
-> - Issue the cert for the **root domain** (e.g., `yourdomain.com`) and use `_acme-challenge` as the host
-> - Use a **single-level subdomain** (e.g., `lab.yourdomain.com`) and use `_acme-challenge.lab` as the host
+> **⚠️ Namecheap users:** Namecheap cannot create dotted host names like `_acme-challenge.www`.
+> You may need to use a different DNS provider, or issue each subdomain certificate separately.
 
 ---
 
 ## 5. Verify DNS Propagation
 
-Before going back to certbot, **verify the TXT record is live**. If you press Enter before the record propagates, the challenge will fail and you'll have to start over.
+Before pressing Enter in certbot, **verify each TXT record is live**. If you press Enter before the record propagates, the challenge will fail and you'll have to start over.
 
 Run this from any terminal:
 
 ```bash
-nslookup -type=TXT _acme-challenge.appgw-lab.yourdomain.com
+# Check each domain's TXT record
+nslookup -type=TXT _acme-challenge.acme.com
+nslookup -type=TXT _acme-challenge.www.acme.com
+nslookup -type=TXT _acme-challenge.api.acme.com
+nslookup -type=TXT _acme-challenge.app.acme.com
 ```
 
 Or:
 
 ```bash
-dig TXT _acme-challenge.appgw-lab.yourdomain.com +short
+dig TXT _acme-challenge.acme.com +short
+dig TXT _acme-challenge.www.acme.com +short
 ```
 
 ### What you should see (success)
@@ -243,19 +296,19 @@ dig TXT _acme-challenge.appgw-lab.yourdomain.com +short
 "A3f7k9xB2mQ4pR8tY1wZ6vN0cD5eH3jL"
 ```
 
-The random string from certbot should appear. If you see this, you're ready.
+The random string from certbot should appear. If you see this, you're ready to press Enter for that domain.
 
 ### What you might see (not ready yet)
 
 ```
-** server can't find _acme-challenge.appgw-lab.yourdomain.com: NXDOMAIN
+** server can't find _acme-challenge.acme.com: NXDOMAIN
 ```
 
-This means the record hasn't propagated yet. Wait 30-60 seconds and try again. Azure DNS is usually fast (under a minute). GoDaddy can take up to 30 minutes.
+This means the record hasn't propagated yet. Wait 30-60 seconds and try again.
 
 ### Using a web tool
 
-You can also check at [https://toolbox.googleapps.com/apps/dig/#TXT/](https://toolbox.googleapps.com/apps/dig/) — enter `_acme-challenge.appgw-lab.yourdomain.com` and look for your TXT value.
+You can also check at [https://toolbox.googleapps.com/apps/dig/#TXT/](https://toolbox.googleapps.com/apps/dig/) — enter `_acme-challenge.acme.com` and look for your TXT value.
 
 ---
 
@@ -263,21 +316,26 @@ You can also check at [https://toolbox.googleapps.com/apps/dig/#TXT/](https://to
 
 Once you've confirmed the TXT record is live (Step 5), go back to the **certbot terminal** and **press Enter**.
 
-Certbot will:
-1. Tell Let's Encrypt to check the DNS record
-2. Let's Encrypt verifies the TXT value matches
-3. Let's Encrypt issues your certificate
+For a multi-domain SAN cert, certbot will repeat this cycle for each domain:
+1. You press Enter
+2. Let's Encrypt verifies the TXT record
+3. Certbot shows the next domain's challenge
+4. You create that TXT record, verify it, then press Enter again
+
+After all domains are verified, Let's Encrypt issues a single certificate covering all of them.
 
 ### What you should see (success)
 
 ```
 Successfully received certificate.
-Certificate is saved at: ~/letsencrypt/live/appgw-lab.yourdomain.com/fullchain.pem
-Key is saved at:         ~/letsencrypt/live/appgw-lab.yourdomain.com/privkey.pem
+Certificate is saved at: ~/letsencrypt/live/acme.com/fullchain.pem
+Key is saved at:         ~/letsencrypt/live/acme.com/privkey.pem
 This certificate expires on 2026-05-21.
 ```
 
-🎉 **You now have a valid TLS certificate!**
+🎉 **You now have a valid multi-domain TLS certificate!**
+
+The cert directory is named after the **first** `-d` domain (e.g., `acme.com`). The certificate inside covers all 4 domains.
 
 The important files:
 
@@ -306,9 +364,11 @@ Azure Application Gateway doesn't accept PEM files directly. You need to convert
 ```bash
 openssl pkcs12 -export \
   -out appgw-cert.pfx \
-  -inkey ~/letsencrypt/live/appgw-lab.yourdomain.com/privkey.pem \
-  -in ~/letsencrypt/live/appgw-lab.yourdomain.com/fullchain.pem
+  -inkey ~/letsencrypt/live/acme.com/privkey.pem \
+  -in ~/letsencrypt/live/acme.com/fullchain.pem
 ```
+
+> **Multi-domain note:** The directory is named after the first `-d` domain. All SAN domains are embedded in the single `fullchain.pem` file.
 
 ### What happens
 
@@ -336,7 +396,7 @@ openssl pkcs12 -in appgw-cert.pfx -nokeys -clcerts | openssl x509 -subject -issu
 You should see your domain in the `subject` and Let's Encrypt's intermediate CA in the `issuer`:
 
 ```
-subject=CN = appgw-lab.yourdomain.com
+subject=CN = acme.com
 issuer=C = US, O = Let's Encrypt, CN = R10
 ```
 
@@ -519,13 +579,13 @@ curl -k https://$PUBLIC_IP/
 
 ```bash
 # Connect and show the cert info
-openssl s_client -connect $PUBLIC_IP:443 -servername yourdomain.com < /dev/null 2>/dev/null | openssl x509 -subject -issuer -dates -noout
+openssl s_client -connect $PUBLIC_IP:443 -servername acme.com < /dev/null 2>/dev/null | openssl x509 -subject -issuer -dates -noout
 ```
 
 You should see:
 
 ```
-subject=CN = yourdomain.com
+subject=CN = acme.com
 issuer=C = US, O = Let's Encrypt, CN = R10
 notBefore=Feb 21 01:23:45 2026 GMT
 notAfter=May 22 01:23:45 2026 GMT
@@ -544,10 +604,13 @@ curl -I http://$PUBLIC_IP/
 Create a DNS A record pointing your domain to the public IP:
 
 ```
-yourdomain.com  →  <public IP>
+acme.com      →  <public IP>
+www.acme.com  →  <public IP>
+api.acme.com  →  <public IP>
+app.acme.com  →  <public IP>
 ```
 
-Then browse to `https://yourdomain.com` in your browser — the certificate should
+Then browse to `https://acme.com` in your browser — the certificate should
 show as valid (green lock) because it matches the domain name.
 
 ---
@@ -559,16 +622,31 @@ The ACME challenge TXT record is no longer needed. Clean it up:
 ### Azure DNS
 
 ```bash
-az network dns record-set txt remove-record \
+# Clean up all TXT records
+az network dns record-set txt delete \
   --resource-group "your-dns-resource-group" \
-  --zone-name "yourdomain.com" \
-  --record-set-name "_acme-challenge.appgw-lab" \
-  --value "A3f7k9xB2mQ4pR8tY1wZ6vN0cD5eH3jL"
+  --zone-name "acme.com" \
+  --name "_acme-challenge" --yes
+
+az network dns record-set txt delete \
+  --resource-group "your-dns-resource-group" \
+  --zone-name "acme.com" \
+  --name "_acme-challenge.www" --yes
+
+az network dns record-set txt delete \
+  --resource-group "your-dns-resource-group" \
+  --zone-name "acme.com" \
+  --name "_acme-challenge.api" --yes
+
+az network dns record-set txt delete \
+  --resource-group "your-dns-resource-group" \
+  --zone-name "acme.com" \
+  --name "_acme-challenge.app" --yes
 ```
 
 ### Other providers
 
-Just delete the `_acme-challenge.appgw-lab` TXT record from your DNS management panel.
+Delete all `_acme-challenge` TXT records from your DNS management panel.
 
 ---
 

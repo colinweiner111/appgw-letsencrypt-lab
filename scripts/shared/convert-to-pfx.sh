@@ -6,8 +6,8 @@
 #   ./convert-to-pfx.sh -d <domain> [-c <cert-dir>] [-o <output-path>] [-p <password>]
 #
 # Examples:
-#   ./convert-to-pfx.sh -d appgw-lab.yourdomain.com
-#   ./convert-to-pfx.sh -d appgw-lab.yourdomain.com -o ./mycert.pfx -p "MyP@ss123"
+#   ./convert-to-pfx.sh -d acme.com
+#   ./convert-to-pfx.sh -d acme.com -o ./mycert.pfx -p "MyP@ss123"
 
 set -euo pipefail
 
@@ -55,7 +55,7 @@ done
 
 if [ -z "$DOMAIN" ]; then
     echo "ERROR: Domain is required. Use -d <domain>"
-    echo "Example: $0 -d appgw-lab.yourdomain.com"
+    echo "Example: $0 -d acme.com"
     exit 1
 fi
 

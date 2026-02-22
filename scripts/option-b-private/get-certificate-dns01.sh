@@ -10,8 +10,8 @@
 # This means no inbound port 80 or public endpoint is needed.
 #
 # Examples:
-#   ./get-certificate-dns01.sh -d appgw-lab.yourdomain.com
-#   ./get-certificate-dns01.sh -d appgw-lab.yourdomain.com --staging
+#   ./get-certificate-dns01.sh -d acme.com
+#   ./get-certificate-dns01.sh -d acme.com --staging
 
 set -euo pipefail
 
@@ -56,7 +56,7 @@ done
 
 if [ -z "$DOMAIN" ]; then
     echo "ERROR: Domain is required. Use -d <domain>"
-    echo "Example: $0 -d appgw-lab.yourdomain.com"
+    echo "Example: $0 -d acme.com"
     exit 1
 fi
 

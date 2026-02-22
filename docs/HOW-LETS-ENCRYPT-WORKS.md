@@ -19,7 +19,7 @@ A beginner-friendly guide to Let's Encrypt, ACME challenges, and how they apply 
 
 ## The Problem
 
-You want your users to connect to your app over HTTPS. To do that, your web server (or in this case, Azure Application Gateway) needs a **TLS certificate** — a digital file that proves "yes, this server really is `appgw-lab.yourdomain.com`."
+You want your users to connect to your app over HTTPS. To do that, your web server (or in this case, Azure Application Gateway) needs a **TLS certificate** — a digital file that proves "yes, this server really is `acme.com` (and `www.acme.com`, `api.acme.com`, etc.)."
 
 Traditionally, you'd buy a certificate from a Certificate Authority (CA) like DigiCert or GoDaddy for $50-$200/year. You'd generate a CSR, email it to the CA, wait for approval, download the cert, convert it to the right format, and upload it.
 
@@ -178,27 +178,30 @@ certbot certonly \
   --manual \
   --preferred-challenges dns \
   --config-dir ~/letsencrypt --work-dir ~/letsencrypt/work --logs-dir ~/letsencrypt/logs \
-  -d appgw-lab.yourdomain.com
+  -d acme.com \
+  -d www.acme.com \
+  -d api.acme.com \
+  -d app.acme.com
 ```
 
 Breaking down the flags:
 - `certonly` — just get the cert, don't try to install it on a web server
 - `--manual` — I'll handle the DNS record myself (as opposed to using a DNS plugin)
 - `--preferred-challenges dns` — use the DNS-01 challenge type
-- `-d appgw-lab.yourdomain.com` — the domain name for the certificate
+- `-d acme.com -d www.acme.com ...` — every domain to include in the certificate (as Subject Alternative Names)
 
-Certbot will pause and ask you to create a TXT record. Once you do, press Enter and it continues.
+Certbot will pause and ask you to create a TXT record **for each domain**. It prompts one at a time — create the record, press Enter, and it moves to the next.
 
 ---
 
 ## The Certificate Files
 
-After certbot succeeds, it saves files to `~/letsencrypt/live/yourdomain.com/`:
+After certbot succeeds, it saves files to a directory named after the **first `-d` domain**:
 
 ```
-~/letsencrypt/live/appgw-lab.yourdomain.com/
+~/letsencrypt/live/acme.com/
 ├── privkey.pem        ← Your private key (never share this)
-├── cert.pem           ← Your certificate only (leaf cert)
+├── cert.pem           ← Your certificate only (leaf cert — covers all SANs)
 ├── chain.pem          ← The intermediate CA certificate
 └── fullchain.pem      ← cert.pem + chain.pem combined (USE THIS ONE)
 ```
@@ -233,9 +236,9 @@ When a browser verifies your certificate, it checks a chain of signatures:
 │                                                      │
 │       ▼  signs                                       │
 │                                                      │
-│  appgw-lab.yourdomain.com  (Your Certificate)        │
+│  acme.com  (Your Certificate)                        │
 │  • Signed by the intermediate CA                     │
-│  • Contains your domain name and public key          │
+│  • Contains your domain names (SANs) and public key  │
 │  • This is what's in cert.pem                        │
 └─────────────────────────────────────────────────────┘
 ```

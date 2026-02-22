@@ -88,14 +88,20 @@ Note the outputs — you'll need `keyVaultName` for the cert import.
 ```bash
 # Automated (Azure DNS)
 ./scripts/option-b-private/azure-dns-certbot.sh \
-  -d appgw-lab.yourdomain.com \
-  --dns-zone yourdomain.com \
+  -d acme.com \
+  -d www.acme.com \
+  -d api.acme.com \
+  -d app.acme.com \
+  --dns-zone acme.com \
   --dns-rg dns-rg
 
-# Or manual
+# Or manual (multi-domain SAN cert)
 certbot certonly --manual --preferred-challenges dns \
   --config-dir ~/letsencrypt --work-dir ~/letsencrypt/work --logs-dir ~/letsencrypt/logs \
-  -d appgw-lab.yourdomain.com
+  -d acme.com \
+  -d www.acme.com \
+  -d api.acme.com \
+  -d app.acme.com
 ```
 
 ### Step 3 — Convert to PFX
@@ -103,8 +109,8 @@ certbot certonly --manual --preferred-challenges dns \
 ```bash
 openssl pkcs12 -export \
   -out appgw-cert.pfx \
-  -inkey ~/letsencrypt/live/appgw-lab.yourdomain.com/privkey.pem \
-  -in ~/letsencrypt/live/appgw-lab.yourdomain.com/fullchain.pem
+  -inkey ~/letsencrypt/live/acme.com/privkey.pem \
+  -in ~/letsencrypt/live/acme.com/fullchain.pem
 ```
 
 ### Step 4 — Import to Key Vault
@@ -254,7 +260,7 @@ DNS-01 validates domain ownership via a DNS TXT record — no port 80 listener r
 │  (Azure DNS, etc.)  │
 │                     │
 │  _acme-challenge.   │
-│  appgw-lab.domain   │
+│  acme.com            │
 │  → "<validation>"   │
 └──────────┬─────────┘
            │
@@ -279,15 +285,16 @@ DNS-01 validates domain ownership via a DNS TXT record — no port 80 listener r
 
 #### Step 1 — DNS Setup
 
-Create an A record so clients can resolve your App Gateway:
+Create A records so clients can resolve your App Gateway:
 
 ```
-appgw-lab.yourdomain.com  →  <App Gateway Private IP>
+acme.com      →  <App Gateway Public IP>
+www.acme.com  →  <App Gateway Public IP>
+api.acme.com  →  <App Gateway Public IP>
+app.acme.com  →  <App Gateway Public IP>
 ```
 
-This A record is for **client resolution only** — it is NOT required for DNS-01 validation. Let's Encrypt only checks the `_acme-challenge` TXT record (Step 3). You could issue the certificate even before the A record exists.
-
-> For internal clients, you can alternatively use Azure Private DNS for the A record. But the parent zone hosting the `_acme-challenge` TXT record must be **public**.
+These A records are for **client resolution only** — they are NOT required for DNS-01 validation. Let's Encrypt only checks the `_acme-challenge` TXT records.
 
 #### Step 2 — Request Certificate with DNS-01
 
@@ -296,14 +303,17 @@ certbot certonly \
   --manual \
   --preferred-challenges dns \
   --config-dir ~/letsencrypt --work-dir ~/letsencrypt/work --logs-dir ~/letsencrypt/logs \
-  -d appgw-lab.yourdomain.com
+  -d acme.com \
+  -d www.acme.com \
+  -d api.acme.com \
+  -d app.acme.com
 ```
 
-Certbot will display:
+Certbot will prompt you once per domain to deploy a TXT record:
 
 ```
 Please deploy a DNS TXT record under the name:
-  _acme-challenge.appgw-lab.yourdomain.com
+  _acme-challenge.acme.com
 with the following value:
   <random-validation-string>
 ```
@@ -317,14 +327,14 @@ Add the TXT record to your DNS provider.
 ```bash
 az network dns record-set txt add-record \
   --resource-group "dns-rg" \
-  --zone-name "yourdomain.com" \
-  --record-set-name "_acme-challenge.appgw-lab" \
+  --zone-name "acme.com" \
+  --record-set-name "_acme-challenge" \
   --value "<validation-string>"
 ```
 
-> **Note:** The `--record-set-name` is the **relative** name within the zone. Do NOT include the zone name. For example, use `_acme-challenge.appgw-lab`, not `_acme-challenge.appgw-lab.yourdomain.com`.
+> **Note:** The `--record-set-name` is the **relative** name within the zone. For subdomains, use `_acme-challenge.www`, `_acme-challenge.api`, etc.
 
-**Other providers:** Add `_acme-challenge.appgw-lab.yourdomain.com` as a TXT record in their portal.
+**Other providers:** Add `_acme-challenge.acme.com` as a TXT record in their portal.
 
 Wait for DNS propagation (typically 30-60 seconds for Azure DNS), then press Enter in certbot.
 
@@ -334,8 +344,8 @@ Wait for DNS propagation (typically 30-60 seconds for Azure DNS), then press Ent
 # Convert PEM → PFX
 openssl pkcs12 -export \
   -out appgw-cert.pfx \
-  -inkey ~/letsencrypt/live/appgw-lab.yourdomain.com/privkey.pem \
-  -in ~/letsencrypt/live/appgw-lab.yourdomain.com/fullchain.pem
+  -inkey ~/letsencrypt/live/acme.com/privkey.pem \
+  -in ~/letsencrypt/live/acme.com/fullchain.pem
 ```
 
 ```bash
@@ -350,11 +360,11 @@ openssl pkcs12 -export \
 #### Step 5 — Clean Up TXT Record
 
 ```bash
-az network dns record-set txt remove-record \
+az network dns record-set txt delete \
   --resource-group "dns-rg" \
-  --zone-name "yourdomain.com" \
-  --record-set-name "_acme-challenge.appgw-lab" \
-  --value "<validation-string>"
+  --zone-name "acme.com" \
+  --name "_acme-challenge" --yes
+# Repeat for _acme-challenge.www, _acme-challenge.api, _acme-challenge.app
 ```
 
 ### Fully Automated (Azure DNS)
@@ -363,8 +373,9 @@ For a production-grade, one-command experience:
 
 ```bash
 ./scripts/option-b-private/azure-dns-certbot.sh \
-  -d appgw-lab.contoso.com \
-  --dns-zone contoso.com \
+  -d acme.com \
+  -d www.acme.com \
+  --dns-zone acme.com \
   --dns-rg dns-rg \
   --appgw-name myAppGW \
   --appgw-rg appgw-rg
@@ -383,7 +394,7 @@ Add `--staging` for testing without hitting rate limits.
 ### Using the Bash Script
 
 ```bash
-./scripts/option-b-private/get-certificate-dns01.sh -d appgw-lab.yourdomain.com
+./scripts/option-b-private/get-certificate-dns01.sh -d acme.com
 ```
 
 This runs certbot in interactive DNS-01 mode — you'll manually add the TXT record when prompted.
@@ -405,7 +416,7 @@ Use this if your App Gateway has a **public IP address**. Let's Encrypt validate
                                      ▲
                                      │
                               DNS A Record
-                          appgw-lab.yourdomain.com
+                          acme.com
                                 → App GW Public IP
 ```
 
@@ -417,10 +428,10 @@ Use this if your App Gateway has a **public IP address**. Let's Encrypt validate
 #### Step 1 — Create Public DNS Record
 
 ```
-appgw-lab.yourdomain.com  →  <App Gateway Public IP>
+acme.com  →  <App Gateway Public IP>
 ```
 
-Verify: `nslookup appgw-lab.yourdomain.com`
+Verify: `nslookup acme.com`
 
 #### Step 2 — Temporarily Open HTTP on App Gateway
 
@@ -437,16 +448,16 @@ Let's Encrypt must reach port 80 on your domain.
 # Standalone mode
 certbot certonly --standalone \
   --config-dir ~/letsencrypt --work-dir ~/letsencrypt/work --logs-dir ~/letsencrypt/logs \
-  -d appgw-lab.yourdomain.com
+  -d acme.com
 
 # Or use the included script
-./scripts/option-a-public/get-certificate.sh -d appgw-lab.yourdomain.com
+./scripts/option-a-public/get-certificate.sh -d acme.com
 ```
 
 Certificate files:
 
 ```
-~/letsencrypt/live/appgw-lab.yourdomain.com/
+~/letsencrypt/live/acme.com/
 ├── fullchain.pem
 └── privkey.pem
 ```
@@ -456,11 +467,11 @@ Certificate files:
 ```bash
 openssl pkcs12 -export \
   -out appgw-cert.pfx \
-  -inkey ~/letsencrypt/live/appgw-lab.yourdomain.com/privkey.pem \
-  -in ~/letsencrypt/live/appgw-lab.yourdomain.com/fullchain.pem
+  -inkey ~/letsencrypt/live/acme.com/privkey.pem \
+  -in ~/letsencrypt/live/acme.com/fullchain.pem
 ```
 
-Or: `./scripts/shared/convert-to-pfx.sh -d appgw-lab.yourdomain.com`
+Or: `./scripts/shared/convert-to-pfx.sh -d acme.com`
 
 #### Step 5 — Upload to Application Gateway
 
@@ -505,7 +516,7 @@ When you use Let's Encrypt, your certificate is part of a **chain of trust** tha
 │                                                                  │
 │       ▼  signs                                                   │
 │                                                                  │
-│  appgw-lab.yourdomain.com  (Your Leaf Certificate)               │
+│  acme.com  (Your Leaf Certificate)                               │
 │  ├── Signed by the intermediate CA                               │
 │  └── Contains your domain name and public key                    │
 └──────────────────────────────────────────────────────────────────┘
