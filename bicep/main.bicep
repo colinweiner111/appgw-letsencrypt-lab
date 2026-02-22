@@ -55,6 +55,22 @@ param skuName string = 'Standard_v2'
 @maxValue(4)
 param vmCount int = 2
 
+@description('Enable end-to-end TLS (App Gateway connects to backends over HTTPS:443)')
+param enableE2ETLS bool = false
+
+@description('Backend hostname for E2E TLS SNI matching (must match backend cert CN/SAN)')
+param backendHostName string = ''
+
+@description('Hostname for multi-site listener (e.g. gannonweiner.com). Enables multi-site mode.')
+param listenerHostName string = ''
+
+@description('Hostname for the second site (e.g. calleighweiner.com). Adds a second set of listeners.')
+param secondSiteHostName string = ''
+
+@secure()
+@description('Key Vault secret ID for the second site SSL certificate')
+param secondSiteKeyVaultSecretId string = ''
+
 @description('Deploy Azure Bastion for secure VM access')
 param deployBastion bool = false
 
@@ -131,6 +147,11 @@ module appGateway 'appgw.bicep' = {
     skuName: skuName
     enableHttps: enableHttps
     keyVaultSecretId: keyVaultSecretId
+    enableE2ETLS: enableE2ETLS
+    backendHostName: backendHostName
+    listenerHostName: listenerHostName
+    secondSiteHostName: secondSiteHostName
+    secondSiteKeyVaultSecretId: secondSiteKeyVaultSecretId
     tags: tags
   }
 }

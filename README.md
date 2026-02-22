@@ -1,9 +1,9 @@
 # Azure Application Gateway v2 TLS Lab
-## Public & Private Deployments Using Let's Encrypt (HTTP-01 & DNS-01)
+## End-to-End TLS, Multi-Site Hosting & F5 Migration Demo
 
-Free TLS certificates for Azure Application Gateway v2 using Let's Encrypt. Includes full Bicep infrastructure (VNet, App Gateway, Key Vault, backend VMs) and automated certificate issuance via DNS-01 or HTTP-01.
+Full-featured Azure Application Gateway v2 lab with Let's Encrypt certificates, multi-site listeners, SSL Profiles, response header rewrite rules, and end-to-end TLS — designed as a hands-on walkthrough for teams migrating from F5 BIG-IP.
 
-No certificate purchase required. Public App Gateway with Key Vault TLS integration.
+Includes complete Bicep IaC (VNet, App Gateway, Key Vault, backend VMs), automated certificate issuance via DNS-01 or HTTP-01, and a self-documenting landing page that shows every App Gateway feature live.
 
 > **New to Let's Encrypt?** Read [How Let's Encrypt Works](docs/HOW-LETS-ENCRYPT-WORKS.md) first — it explains certificates, ACME challenges, certbot, PFX conversion, and the trust chain in plain language before you dive into the lab steps.
 >
@@ -22,18 +22,29 @@ No certificate purchase required. Public App Gateway with Key Vault TLS integrat
 │  │  │ subnet-appgw        │   │ subnet-backend               │   │  │
 │  │  │ 10.0.0.0/24         │   │ 10.0.1.0/24                  │   │  │
 │  │  │                     │   │                              │   │  │
-│  │  │  App Gateway v2     │──►│  VM 1 (NGINX)  ◄── no pub IP│   │  │
-│  │  │  Public + Private IP│   │  VM 2 (NGINX)  ◄── no pub IP│   │  │
-│  │  │  HTTPS (443)        │   │                              │   │  │
-│  │  │                     │   └──────────────────────────────┘   │  │
+│  │  │  App Gateway v2     │──►│  VM 1 (NGINX+SNI) ◄─ no pub │   │  │
+│  │  │  Public + Private IP│   │  VM 2 (NGINX+SNI) ◄─ no pub │   │  │
+│  │  │                     │   │                              │   │  │
+│  │  │  Listeners:         │   │  Server blocks:              │   │  │
+│  │  │  ├ gannonweiner.com │   │  ├ gannonweiner.com:443      │   │  │
+│  │  │  └ calleighweiner   │   │  └ calleighweiner.com:443    │   │  │
+│  │  │                     │   │                              │   │  │
+│  │  │  SSL Profiles:      │   │  Let's Encrypt certs         │   │  │
+│  │  │  ├ (gateway default)│   │  (E2E TLS re-encryption)     │   │  │
+│  │  │  └ sslprof-calleigh │   └──────────────────────────────┘   │  │
+│  │  │                     │                                      │  │
+│  │  │  Rewrite Rules:     │                                      │  │
+│  │  │  └ rwset-security-  │                                      │  │
+│  │  │    headers           │                                      │  │
 │  │  └──────────┬──────────┘                                      │  │
 │  │             │                                                  │  │
 │  └─────────────┼──────────────────────────────────────────────────┘  │
 │                │ Key Vault                                           │
 │  ┌─────────────▼──────────────────┐   ┌────────────────────────┐    │
 │  │  kv-appgw-xxx                  │   │  id-appgw-lab          │    │
-│  │  TLS cert (secret URI)         │◄──│  User-Assigned MI      │    │
-│  │  RBAC: Key Vault Secrets User  │   │  Attached to App GW    │    │
+│  │  cert-gannonweiner (secret)    │◄──│  User-Assigned MI      │    │
+│  │  cert-calleighweiner (secret)  │   │  Attached to App GW    │    │
+│  │  RBAC: Key Vault Secrets User  │   │                        │    │
 │  └────────────────────────────────┘   └────────────────────────┘    │
 └──────────────────────────────────────────────────────────────────────┘
 ```
@@ -44,9 +55,13 @@ No certificate purchase required. Public App Gateway with Key Vault TLS integrat
 |---|---|
 | **User-Assigned Managed Identity** | App Gateway → Key Vault access (enterprise-preferred over system-assigned) |
 | **VNet** with dedicated subnets | App GW subnet (required isolation), backend subnet, optional Bastion |
-| **Application Gateway v2** | Standard_v2 or WAF_v2, public + private IP, autoscale, HTTPS listener |
-| **Azure Key Vault** | RBAC-based, stores TLS cert, referenced via secret URI |
-| **Backend VMs** (Linux + NGINX) | 2 VMs, no public IPs, unique page per VM for LB demo |
+| **Application Gateway v2** | Standard_v2 or WAF_v2, public + private IP, autoscale |
+| **Multi-site HTTPS listeners** | Separate listeners per hostname (e.g., `gannonweiner.com`, `calleighweiner.com`) with HTTP→HTTPS redirect |
+| **SSL Profiles** | Per-listener TLS policy override — equivalent of F5 Client SSL Profiles |
+| **Rewrite Rules** | Response header manipulation (HSTS, strip Server, X-Content-Type-Options) — equivalent of F5 iRules |
+| **End-to-End TLS** | App Gateway re-encrypts traffic to NGINX backends over HTTPS:443 |
+| **Azure Key Vault** | RBAC-based, stores TLS certs (one per site), referenced via secret URI |
+| **Backend VMs** (Linux + NGINX) | 2 VMs, no public IPs, NGINX SNI server blocks per site, Let's Encrypt certs |
 | **NSGs** | App GW subnet allows GatewayManager + HTTP + HTTPS; backend allows only App GW traffic |
 
 ### Design Decisions
@@ -61,6 +76,11 @@ No certificate purchase required. Public App Gateway with Key Vault TLS integrat
 | Explicit health probe definition | Never rely on defaults — define protocol, path, thresholds |
 | No public IPs on backend VMs | Traffic only via App Gateway, management via Bastion |
 | cloud-init for NGINX install | Lightweight, no custom images needed |
+| CAF naming convention for sub-resources | `lstn-`, `be-htst-`, `hp-`, `rr-`, `rdrcfg-`, `bp-`, `cert-`, `sslprof-`, `rwset-` prefixes for clarity |
+| Multi-site listeners (not Basic) | Each hostname gets its own listener, enabling per-site SSL Profiles and routing |
+| Differentiated SSL Profiles | `gannonweiner.com` inherits gateway default policy; `calleighweiner.com` uses a strict custom SSL Profile — demonstrates F5-style per-VIP TLS control |
+| Rewrite rules on HTTPS routing rules only | Security headers only apply to HTTPS responses; HTTP requests are redirected before reaching a backend |
+| Backend hostname override (not `pickHostNameFromBackendTarget`) | Explicit SNI hostname in backend HTTP settings for VM/IaaS backends per Microsoft guidance |
 
 ---
 
@@ -176,6 +196,94 @@ curl -k https://<App-Gateway-Public-IP>/
 # Or create a DNS A record (e.g., yourdomain.com → public IP) and browse:
 curl -k https://yourdomain.com/
 ```
+
+---
+
+## Feature Demo Guide
+
+This lab deploys several App Gateway features beyond basic TLS termination. Each feature is documented on the **live landing page** (served by the backend VMs) with a dedicated card showing the configuration and its effect in real time.
+
+### Rewrite Rules — Response Headers
+
+App Gateway **Rewrite Rules** modify HTTP headers and URLs in-flight — the equivalent of **F5 iRules** or **LTM Policies**. They are defined in a **Rewrite Rule Set** (`rwset-security-headers`) and attached to HTTPS routing rules, so every response flowing through those rules is automatically modified.
+
+#### What's Deployed
+
+| Rule Name | Sequence | Action | Header | Value |
+|---|---|---|---|---|
+| `rw-add-hsts` | 100 | **Set** response header | `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` |
+| `rw-strip-server` | 200 | **Delete** response header | `Server` | *(empty — removes the header entirely)* |
+| `rw-add-xcto` | 300 | **Set** response header | `X-Content-Type-Options` | `nosniff` |
+
+#### What Each Rule Does
+
+**`rw-add-hsts`** — Injects `Strict-Transport-Security: max-age=31536000; includeSubDomains` into every response. Tells browsers "never connect to this domain over HTTP again for 1 year." Once a browser sees this header, it automatically upgrades any `http://` request to `https://` locally — the request never leaves the browser as plaintext. Prevents SSL-stripping attacks (e.g., a rogue Wi-Fi intercepting the initial HTTP request before the 301 redirect fires).
+
+**`rw-strip-server`** — Deletes the `Server` response header entirely. Without this rule, every response includes `Server: nginx/1.x.x`, which tells attackers exactly what software and version the backend runs. That's the first thing a scanner looks for — known CVEs for that specific version. Setting the header value to an empty string causes App Gateway to strip it completely.
+
+**`rw-add-xcto`** — Adds `X-Content-Type-Options: nosniff` to every response. Prevents browsers from "MIME-type sniffing" — where the browser ignores the declared `Content-Type` and guesses based on content. Without this, an attacker could upload a file that looks like HTML but is served as `text/plain`, and the browser might execute it as HTML/JavaScript anyway. `nosniff` forces the browser to trust the server's declared type.
+
+All three are **response header** rewrites — they modify what the client receives, not what the backend sees.
+
+#### How to Demo
+
+**1. Show the "Before" (raw backend response without App Gateway):**
+
+```bash
+# Curl directly to a backend VM — bypasses App Gateway entirely
+curl -skI --resolve gannonweiner.com:443:10.0.1.4 https://gannonweiner.com
+```
+
+You'll see:
+- `Server: nginx/1.x.x` — **exposed** (technology disclosure)
+- No `Strict-Transport-Security` header
+- No `X-Content-Type-Options` header
+
+**2. Show the "After" (through App Gateway with rewrite rules):**
+
+```bash
+# Curl through App Gateway — rewrite rules are applied
+curl -skI --resolve gannonweiner.com:443:52.251.47.185 https://gannonweiner.com
+```
+
+You'll see:
+- **No** `Server` header — stripped by `rw-strip-server`
+- `Strict-Transport-Security: max-age=31536000; includeSubDomains` — injected by `rw-add-hsts`
+- `X-Content-Type-Options: nosniff` — injected by `rw-add-xcto`
+
+**3. Browser DevTools (visual proof for customers):**
+
+1. Open **https://gannonweiner.com** in Edge or Chrome
+2. Press **F12** → **Network** tab
+3. Refresh the page (Ctrl+R)
+4. Click the first request (the HTML document)
+5. Click **Headers** → scroll to **Response Headers**
+6. Point out: HSTS and X-Content-Type-Options present, Server absent
+
+**4. Landing Page Card:**
+
+Scroll to the **"Rewrite Rules — Response Headers"** card on the page. It documents all three rules inline — rule names, sequence numbers, actions, and F5 comparison — so the customer sees the config documented live alongside the proof in DevTools.
+
+**5. Portal Walkthrough:**
+
+1. Portal → **rg-appgw-lab** → **appgw-lab** → **Rewrites** (left nav)
+2. Click **rwset-security-headers**
+3. Show the three rules: `rw-add-hsts`, `rw-strip-server`, `rw-add-xcto`
+4. Click into one to show the condition/action UI
+5. Navigate to **Rules** → click `rr-gannonweiner-https` → show the rewrite set association
+
+#### F5 Comparison
+
+| F5 BIG-IP | Azure App Gateway |
+|---|---|
+| iRule: `HTTP::header insert` in `HTTP_RESPONSE` | Rewrite Rule → Set response header |
+| iRule: `HTTP::header remove` in `HTTP_RESPONSE` | Rewrite Rule → Set header value to empty string |
+| iRule attached to virtual server | Rewrite Rule Set attached to routing rule |
+| iRule = Tcl scripting, requires developer skill | Rewrite Rule = declarative config, portal or Bicep IaC |
+| iRule debugging: `log local0.` + tcpdump | Rewrite Rule verification: check response headers in browser DevTools |
+| iRule error can crash a virtual server | Rewrite Rule misconfiguration is isolated, no crash risk |
+
+> **Key talking point:** *"Everything you did with iRules for header manipulation is a declarative checkbox in App Gateway — no Tcl, no scripting, no risk of a syntax error taking down a VIP."*
 
 ---
 
@@ -606,7 +714,7 @@ Let's Encrypt certificates are valid for **90 days**.
 | `bicep/network.bicep` | VNet with App GW, backend, and optional Bastion subnets + NSGs |
 | `bicep/keyvault.bicep` | Key Vault with RBAC role assignment for managed identity |
 | `bicep/backend.bicep` | Linux VMs with NGINX (no public IPs, cloud-init provisioned) |
-| `bicep/appgw.bicep` | App Gateway v2 — public + private IP, Key Vault TLS, autoscale, health probes |
+| `bicep/appgw.bicep` | App Gateway v2 — multi-site listeners, SSL Profiles, rewrite rules, E2E TLS, Key Vault certs, health probes |
 
 ## Troubleshooting
 

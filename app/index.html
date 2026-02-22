@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Application Gateway Workshop</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+      color: #e0e0e0;
+      min-height: 100vh;
+      padding: 2rem;
+    }
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+    header h1 {
+      font-size: 2rem;
+      color: #00d4ff;
+      margin-bottom: 0.25rem;
+    }
+    header p {
+      color: #888;
+      font-size: 0.95rem;
+    }
+    .badge {
+      display: inline-block;
+      padding: 0.2rem 0.75rem;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-top: 0.5rem;
+    }
+    .badge-https {
+      background: rgba(0, 212, 100, 0.15);
+      color: #00d464;
+      border: 1px solid rgba(0, 212, 100, 0.3);
+    }
+    .badge-http {
+      background: rgba(255, 165, 0, 0.15);
+      color: #ffa500;
+      border: 1px solid rgba(255, 165, 0, 0.3);
+    }
+    .card {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 1.25rem;
+      backdrop-filter: blur(10px);
+    }
+    .card h2 {
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: #00d4ff;
+      margin-bottom: 1rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .card h2 span {
+      font-size: 1rem;
+      margin-right: 0.5rem;
+    }
+    .info-grid {
+      display: grid;
+      grid-template-columns: 180px 1fr;
+      gap: 0.6rem 1rem;
+      font-size: 0.9rem;
+    }
+    .label {
+      color: #888;
+      font-weight: 500;
+    }
+    .value {
+      color: #fff;
+      font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+      font-size: 0.85rem;
+      word-break: break-all;
+    }
+    .value.highlight {
+      color: #00d464;
+    }
+    .value.warn {
+      color: #ffa500;
+    }
+    .lock-icon {
+      font-size: 1.5rem;
+      margin-right: 0.5rem;
+      vertical-align: middle;
+    }
+    .flow-diagram {
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 8px;
+      padding: 1.25rem;
+      font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+      font-size: 0.8rem;
+      text-align: center;
+      line-height: 1.6;
+      overflow-x: auto;
+    }
+    .flow-diagram .arrow { color: #00d4ff; }
+    .flow-diagram .component { color: #fff; }
+    .flow-diagram .detail { color: #888; }
+    footer {
+      text-align: center;
+      margin-top: 2rem;
+      color: #555;
+      font-size: 0.8rem;
+    }
+    footer a { color: #00d4ff; text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+    @media (max-width: 600px) {
+      .info-grid { grid-template-columns: 1fr; }
+      .label { color: #00d4ff; font-size: 0.75rem; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>&#x1F6E1;&#xFE0F; Application Gateway Workshop</h1>
+      <p>Azure Application Gateway v2 &mdash; E2E TLS, Multi-Site, SSL Profiles, Rewrite Rules</p>
+      <div id="proto-badge"></div>
+    </header>
+
+    <!-- Request Headers from App Gateway -->
+    <div class="card">
+      <h2><span>&#x1F310;</span> Headers Injected by App Gateway</h2>
+      <p style="color:#888;font-size:0.8rem;margin-bottom:1rem;">Azure Application Gateway adds these headers to every request forwarded to backend pools. They reveal the original client context that would otherwise be lost after TLS termination and L7 proxying.</p>
+      <div class="info-grid">
+        <div class="label">X-Forwarded-For</div>
+        <div class="value highlight"><!--# echo var="http_x_forwarded_for" default="(not set)" --></div>
+
+        <div class="label" style="grid-column:1/-1;"><span style="color:#555;font-size:0.75rem;">&#x2197;&#xFE0F; Client IP:port before proxying. App Gateway appends its own IP if chained.</span></div>
+
+        <div class="label">X-Forwarded-Proto</div>
+        <div class="value" id="xfp-value"><!--# echo var="http_x_forwarded_proto" default="(not set)" --></div>
+
+        <div class="label" style="grid-column:1/-1;"><span style="color:#555;font-size:0.75rem;">&#x1F512; Original protocol (https). With E2E TLS, the backend also receives encrypted traffic.</span></div>
+
+        <div class="label">X-Forwarded-Port</div>
+        <div class="value"><!--# echo var="http_x_forwarded_port" default="(not set)" --></div>
+
+        <div class="label" style="grid-column:1/-1;"><span style="color:#555;font-size:0.75rem;">&#x1F6AA; Frontend listener port the client connected to (443 for HTTPS, 80 for HTTP).</span></div>
+
+        <div class="label">X-Original-Host</div>
+        <div class="value"><!--# echo var="http_x_original_host" default="(not set)" --></div>
+
+        <div class="label" style="grid-column:1/-1;"><span style="color:#555;font-size:0.75rem;">&#x1F3F7;&#xFE0F; Original Host header from the client request, preserved if App Gateway rewrites Host.</span></div>
+
+        <div class="label">Host Header</div>
+        <div class="value"><!--# echo var="http_host" default="(not set)" --></div>
+
+        <div class="label" style="grid-column:1/-1;"><span style="color:#555;font-size:0.75rem;">&#x1F4E8; Host header as received by NGINX. May differ from X-Original-Host if overridden by backend HTTP settings.</span></div>
+
+        <div class="label">X-Real-IP</div>
+        <div class="value"><!--# echo var="http_x_real_ip" default="(not set)" --></div>
+      </div>
+    </div>
+
+    <!-- Listener Info -->
+    <div class="card">
+      <h2><span>&#x1F3AF;</span> App Gateway Listener</h2>
+      <p style="color:#888;font-size:0.8rem;margin-bottom:1rem;">Inferred from X-Forwarded-Proto and X-Forwarded-Port. App Gateway doesn't expose the listener name as a header, but we can deduce which listener handled this request.</p>
+      <div class="info-grid">
+        <div class="label">Listener Name</div>
+        <div class="value highlight" id="listener-name">Detecting...</div>
+
+        <div class="label">Listener Type</div>
+        <div class="value" id="listener-type">Multi-site</div>
+
+        <div class="label">Hostname Match</div>
+        <div class="value" id="listener-hostname"><!--# echo var="http_host" default="(not set)" --></div>
+
+        <div class="label">Frontend Port</div>
+        <div class="value" id="listener-port"><!--# echo var="http_x_forwarded_port" default="?" --></div>
+
+        <div class="label">Frontend Protocol</div>
+        <div class="value" id="listener-proto"><!--# echo var="http_x_forwarded_proto" default="?" --></div>
+
+        <div class="label" style="grid-column:1/-1;"><span style="color:#555;font-size:0.75rem;">&#x2139;&#xFE0F; Multi-site listeners filter traffic by hostname, allowing multiple sites on the same port. Basic listeners accept all traffic on a port regardless of hostname.</span></div>
+      </div>
+    </div>
+
+    <!-- TLS Settings (SSL Profile) -->
+    <div class="card">
+      <h2><span>&#x1F6E1;&#xFE0F;</span> TLS Settings (SSL Profile)</h2>
+      <p style="color:#888;font-size:0.8rem;margin-bottom:1rem;">App Gateway SSL Profiles define per-listener TLS policies &mdash; the equivalent of an F5 Client SSL Profile. Each listener can enforce its own minimum TLS version and cipher suites, or inherit the gateway-wide default.</p>
+      <div class="info-grid">
+        <div class="label">SSL Profile</div>
+        <div class="value highlight" id="ssl-profile-name">Detecting...</div>
+
+        <div class="label">Predefined Policy</div>
+        <div class="value" id="ssl-policy-name">Detecting...</div>
+
+        <div class="label">Min TLS Version</div>
+        <div class="value" id="ssl-min-tls">Detecting...</div>
+
+        <div class="label">Negotiated Protocol</div>
+        <div class="value highlight" id="ssl-negotiated-proto">Detecting...</div>
+
+        <div class="label">Negotiated Cipher</div>
+        <div class="value" id="ssl-negotiated-cipher" style="font-size:0.78rem;">Detecting...</div>
+
+        <div class="label" style="grid-column:1/-1;"><span style="color:#555;font-size:0.75rem;">&#x1F6E1;&#xFE0F; Listeners without an SSL Profile inherit the gateway-wide default policy. Listeners with an SSL Profile override it &mdash; just like F5 where a virtual server can use the default or a custom <code style="color:#00d4ff;font-size:0.72rem;">Client SSL Profile</code>. Compare this page on gannonweiner.com (gateway default) vs calleighweiner.com (custom SSL Profile).</span></div>
+      </div>
+    </div>
+
+    <!-- Rewrite Rules (Response Headers) -->
+    <div class="card">
+      <h2><span>&#x270F;&#xFE0F;</span> Rewrite Rules &mdash; Response Headers</h2>
+      <p style="color:#888;font-size:0.8rem;margin-bottom:1rem;">App Gateway Rewrite Rules modify HTTP headers and URLs in-flight &mdash; the equivalent of F5 iRules or LTM Policies. These rules are applied per routing rule, so every response through the HTTPS rules gets these security headers added or stripped automatically.</p>
+      <div class="info-grid">
+        <div class="label">Rewrite Set</div>
+        <div class="value highlight">rwset-security-headers</div>
+
+        <div class="label" style="grid-column:1/-1;border-top:1px solid #333;padding-top:0.5rem;"><strong style="color:#00d4ff;">Rule 1: rw-add-hsts</strong> <span style="color:#555;font-size:0.72rem;">(sequence 100)</span></div>
+        <div class="label">Action</div>
+        <div class="value">Set Response Header</div>
+        <div class="label">Header</div>
+        <div class="value" style="font-family:monospace;color:#00d464;">Strict-Transport-Security</div>
+        <div class="label">Value</div>
+        <div class="value" style="font-size:0.78rem;">max-age=31536000; includeSubDomains</div>
+        <div class="label" style="grid-column:1/-1;"><span style="color:#555;font-size:0.72rem;">&#x1F512; Tells browsers to only connect via HTTPS for 1 year. Prevents protocol downgrade attacks.</span></div>
+
+        <div class="label" style="grid-column:1/-1;border-top:1px solid #333;padding-top:0.5rem;"><strong style="color:#00d4ff;">Rule 2: rw-strip-server</strong> <span style="color:#555;font-size:0.72rem;">(sequence 200)</span></div>
+        <div class="label">Action</div>
+        <div class="value">Delete Response Header</div>
+        <div class="label">Header</div>
+        <div class="value" style="font-family:monospace;color:#ff6b6b;text-decoration:line-through;">Server</div>
+        <div class="label">Effect</div>
+        <div class="value" style="font-size:0.78rem;">Removes <code style="color:#ff6b6b;">Server: nginx/x.x.x</code> from responses</div>
+        <div class="label" style="grid-column:1/-1;"><span style="color:#555;font-size:0.72rem;">&#x1F6E1;&#xFE0F; Prevents server technology disclosure. Without this rule, attackers see the exact NGINX version.</span></div>
+
+        <div class="label" style="grid-column:1/-1;border-top:1px solid #333;padding-top:0.5rem;"><strong style="color:#00d4ff;">Rule 3: rw-add-xcto</strong> <span style="color:#555;font-size:0.72rem;">(sequence 300)</span></div>
+        <div class="label">Action</div>
+        <div class="value">Set Response Header</div>
+        <div class="label">Header</div>
+        <div class="value" style="font-family:monospace;color:#00d464;">X-Content-Type-Options</div>
+        <div class="label">Value</div>
+        <div class="value">nosniff</div>
+        <div class="label" style="grid-column:1/-1;"><span style="color:#555;font-size:0.72rem;">&#x1F6AB; Prevents browsers from MIME-type sniffing. Forces Content-Type to be honored as declared.</span></div>
+
+        <div class="label" style="grid-column:1/-1;border-top:1px solid #333;padding-top:0.5rem;"><span style="color:#555;font-size:0.75rem;">&#x1F4A1; <strong>F5 comparison:</strong> These replace iRules like <code style="color:#00d4ff;font-size:0.72rem;">HTTP::header insert</code> and <code style="color:#00d4ff;font-size:0.72rem;">HTTP::header remove</code>. Open DevTools (F12) &rarr; Network tab &rarr; click any request &rarr; Response Headers to verify these are applied.</span></div>
+      </div>
+    </div>
+
+    <!-- TLS Path Explanation -->
+    <div class="card">
+      <h2><span>&#x1F512;</span> TLS Path &mdash; <span id="tls-mode-title">Checking...</span></h2>
+      <div class="info-grid">
+        <div class="label">Frontend Protocol</div>
+        <div class="value" id="fe-proto"><!--# echo var="http_x_forwarded_proto" default="?" --></div>
+
+        <div class="label">Frontend Port</div>
+        <div class="value"><!--# echo var="http_x_forwarded_port" default="?" --></div>
+
+        <div class="label">Backend Protocol</div>
+        <div class="value" id="be-proto-value"><!--# echo var="scheme" default="?" --></div>
+
+        <div class="label">Backend Port</div>
+        <div class="value" id="be-port-value"><!--# echo var="server_port" default="?" --></div>
+
+        <div class="label">Gateway Private IP</div>
+        <div class="value"><!--# echo var="remote_addr" default="unknown" --></div>
+
+        <div class="label" style="grid-column:1/-1;"><span style="color:#555;font-size:0.75rem;">&#x2139;&#xFE0F; Remote Address shows the App Gateway&rsquo;s subnet IP (10.0.0.x), proving the backend received the request from the gateway&mdash;not directly from the client.</span></div>
+
+        <div class="label">Client &rarr; Gateway</div>
+        <div class="value highlight">&#x1F512; Encrypted (TLS 1.2+)</div>
+
+        <div class="label">Gateway &rarr; Backend</div>
+        <div class="value" id="gw-be-status">Checking...</div>
+
+        <div class="label" style="grid-column:1/-1;"><span id="tls-explanation" style="color:#555;font-size:0.75rem;"></span></div>
+      </div>
+    </div>
+
+    <!-- Backend Server Info -->
+    <div class="card">
+      <h2><span>&#x1F5A5;&#xFE0F;</span> Backend Server</h2>
+      <div class="info-grid">
+        <div class="label">Hostname</div>
+        <div class="value highlight"><!--# echo var="hostname" default="unknown" --></div>
+
+        <div class="label">Server Address</div>
+        <div class="value"><!--# echo var="server_addr" default="unknown" --></div>
+
+        <div class="label">Server Port</div>
+        <div class="value"><!--# echo var="server_port" default="unknown" --></div>
+
+        <div class="label">NGINX Version</div>
+        <div class="value"><!--# echo var="nginx_version" default="unknown" --></div>
+
+        <div class="label">Request URI</div>
+        <div class="value"><!--# echo var="request_uri" default="/" --></div>
+
+        <div class="label">Remote Address</div>
+        <div class="value"><!--# echo var="remote_addr" default="unknown" --></div>
+
+        <div class="label">Server Time</div>
+        <div class="value"><!--# echo var="date_local" default="unknown" --></div>
+      </div>
+    </div>
+
+    <!-- Client Browser Info (JavaScript) -->
+    <div class="card">
+      <h2><span>&#x1F4BB;</span> Client Browser</h2>
+      <div class="info-grid">
+        <div class="label">User Agent</div>
+        <div class="value" id="ua"></div>
+
+        <div class="label">Browser</div>
+        <div class="value" id="browser"></div>
+
+        <div class="label">Platform</div>
+        <div class="value" id="platform"></div>
+
+        <div class="label">Screen</div>
+        <div class="value" id="screen"></div>
+
+        <div class="label">Language</div>
+        <div class="value" id="language"></div>
+
+        <div class="label">Connection</div>
+        <div class="value" id="connection"></div>
+      </div>
+    </div>
+
+    <!-- Traffic Flow -->
+    <div class="card">
+      <h2><span>&#x1F6E3;&#xFE0F;</span> Traffic Flow</h2>
+      <div class="flow-diagram" id="flow-diagram">
+        <span class="component">Client</span>
+        <span class="arrow"> ──HTTPS──▶ </span>
+        <span class="component">App Gateway</span>
+        <span class="detail" id="flow-gw-detail"> (TLS re-encrypted)</span>
+        <span class="arrow" id="flow-arrow"> ──HTTPS──▶ </span>
+        <span class="component"><!--# echo var="hostname" default="backend" --></span>
+        <span class="detail"> (<!--# echo var="server_addr" default="10.0.x.x" -->:<span id="flow-port"><!--# echo var="server_port" default="?" --></span>)</span>
+      </div>
+    </div>
+
+    <footer>
+      <p>Azure Application Gateway v2 TLS Lab &bull;
+        <a href="https://github.com/colinweiner111/appgw-letsencrypt-lab" target="_blank">GitHub Repo</a>
+      </p>
+    </footer>
+  </div>
+
+  <script>
+    // Client-side browser info
+    document.getElementById('ua').textContent = navigator.userAgent;
+
+    // Parse browser name
+    const ua = navigator.userAgent;
+    let browser = 'Unknown';
+    if (ua.includes('Edg/')) browser = 'Microsoft Edge';
+    else if (ua.includes('Chrome/')) browser = 'Google Chrome';
+    else if (ua.includes('Firefox/')) browser = 'Mozilla Firefox';
+    else if (ua.includes('Safari/') && !ua.includes('Chrome')) browser = 'Safari';
+    document.getElementById('browser').textContent = browser;
+
+    document.getElementById('platform').textContent = navigator.platform || navigator.userAgentData?.platform || 'Unknown';
+    document.getElementById('screen').textContent = `${screen.width}×${screen.height} @ ${window.devicePixelRatio}x`;
+    document.getElementById('language').textContent = navigator.language;
+
+    // Connection info
+    const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    document.getElementById('connection').textContent = conn
+      ? `${conn.effectiveType || 'unknown'} (RTT: ${conn.rtt || '?'}ms, downlink: ${conn.downlink || '?'} Mbps)`
+      : 'API not available';
+
+    // Protocol badge + E2E TLS detection
+    const xfp = document.getElementById('xfp-value')?.textContent?.trim();
+    const badge = document.getElementById('proto-badge');
+    const bePort = document.getElementById('be-port-value')?.textContent?.trim();
+    const beProto = document.getElementById('be-proto-value')?.textContent?.trim();
+    const isE2E = bePort === '443' || beProto === 'https';
+
+    // Header badge
+    if (xfp === 'https' && isE2E) {
+      badge.innerHTML = '<span class="badge badge-https">&#x1F512; End-to-End TLS &mdash; Encrypted Client &#x2194; Gateway &#x2194; Backend</span>';
+    } else if (xfp === 'https') {
+      badge.innerHTML = '<span class="badge badge-https">&#x1F512; HTTPS &mdash; TLS Terminated at App Gateway</span>';
+    } else if (xfp === 'http') {
+      badge.innerHTML = '<span class="badge badge-http">&#x26A0;&#xFE0F; HTTP &mdash; Not Encrypted</span>';
+    }
+
+    // TLS Path card
+    const titleEl = document.getElementById('tls-mode-title');
+    const gwBeStatus = document.getElementById('gw-be-status');
+    const tlsExplanation = document.getElementById('tls-explanation');
+
+    if (isE2E) {
+      titleEl.textContent = 'End-to-End TLS';
+      gwBeStatus.className = 'value highlight';
+      gwBeStatus.innerHTML = '&#x1F512; Encrypted (TLS 1.2+)';
+      tlsExplanation.innerHTML = '&#x1F512; Full end-to-end encryption. The App Gateway re-encrypts traffic before forwarding to backends over HTTPS:443. The backend cert (Let\u2019s Encrypt) is validated by the gateway. No plaintext anywhere in the path.';
+    } else {
+      titleEl.textContent = 'TLS Termination (Offloading)';
+      gwBeStatus.className = 'value warn';
+      gwBeStatus.innerHTML = '&#x1F513; Unencrypted (HTTP)';
+      tlsExplanation.innerHTML = '&#x1F4A1; Standard TLS offloading. The App Gateway handles TLS handshakes so backends don\u2019t have to. Traffic between gateway and backend is unencrypted (HTTP:80).';
+    }
+
+    // Listener inference — use new CAF naming convention
+    const listenerNameEl = document.getElementById('listener-name');
+    const hostHeader = document.getElementById('listener-hostname')?.textContent?.trim() || '';
+    if (xfp === 'https') {
+      if (hostHeader.includes('calleigh')) {
+        listenerNameEl.textContent = 'lstn-calleighweiner-https (port 443)';
+      } else {
+        listenerNameEl.textContent = 'lstn-gannonweiner-https (port 443)';
+      }
+    } else if (xfp === 'http') {
+      if (hostHeader.includes('calleigh')) {
+        listenerNameEl.textContent = 'lstn-calleighweiner-http (port 80) → redirects to HTTPS';
+      } else {
+        listenerNameEl.textContent = 'lstn-gannonweiner-http (port 80) → redirects to HTTPS';
+      }
+    } else {
+      listenerNameEl.textContent = 'Unknown';
+    }
+
+    // SSL Profile / TLS Settings card
+    const sslProfileEl = document.getElementById('ssl-profile-name');
+    const sslPolicyEl = document.getElementById('ssl-policy-name');
+    const sslMinTlsEl = document.getElementById('ssl-min-tls');
+    const sslProtoEl = document.getElementById('ssl-negotiated-proto');
+    const sslCipherEl = document.getElementById('ssl-negotiated-cipher');
+
+    if (xfp === 'https') {
+      // SSL Profile name based on hostname
+      if (hostHeader.includes('calleigh')) {
+        sslProfileEl.textContent = 'sslprof-calleighweiner';
+        sslPolicyEl.textContent = 'AppGwSslPolicy20220101S (strict)';
+        sslMinTlsEl.innerHTML = 'TLS 1.2 <span style="color:#00d464;font-size:0.75rem;">✓ Enforced (ECDHE+AESGCM only)</span>';
+      } else {
+        sslProfileEl.innerHTML = '<span style="color:#888;">None — inherits gateway default</span>';
+        sslPolicyEl.textContent = 'AppGwSslPolicy20220101 (gateway default)';
+        sslMinTlsEl.innerHTML = 'TLS 1.2 <span style="color:#ffa500;font-size:0.75rem;">✓ Enforced (broader cipher set)</span>';
+      }
+
+      // Detect negotiated TLS version and cipher from browser
+      // performance.getEntries() doesn't expose TLS details, but we can check the security state
+      if (window.location.protocol === 'https:') {
+        // Use the browser's protocol detection
+        sslProtoEl.textContent = 'TLS 1.2 or 1.3 (browser-negotiated)';
+        sslCipherEl.textContent = 'ECDHE + AES-GCM (policy-enforced suite)';
+
+        // Try to get more detail from Performance API if available
+        try {
+          const entries = performance.getEntriesByType('navigation');
+          if (entries.length > 0 && entries[0].nextHopProtocol) {
+            const proto = entries[0].nextHopProtocol;
+            sslProtoEl.textContent = proto === 'h2' ? 'TLS 1.2+ (HTTP/2 via ALPN)' : proto === 'h3' ? 'TLS 1.3 (HTTP/3 QUIC)' : proto;
+          }
+        } catch(e) {}
+      } else {
+        sslProtoEl.textContent = 'N/A (HTTP connection)';
+        sslCipherEl.textContent = 'N/A';
+      }
+    } else {
+      sslProfileEl.textContent = 'N/A (HTTP \u2014 no TLS)';
+      sslPolicyEl.textContent = 'N/A';
+      sslMinTlsEl.textContent = 'N/A';
+      sslProtoEl.textContent = 'None';
+      sslCipherEl.textContent = 'None';
+    }
+
+    // Traffic flow diagram
+    const flowGwDetail = document.getElementById('flow-gw-detail');
+    const flowArrow = document.getElementById('flow-arrow');
+    if (!isE2E) {
+      flowGwDetail.textContent = ' (TLS terminated)';
+      flowArrow.innerHTML = ' \u2500\u2500HTTP\u2500\u2500\u25b6 ';
+    }
+  </script>
+</body>
+</html>

@@ -51,6 +51,22 @@ param maxCapacity int = 2
 @description('Deploy HTTPS listener with Key Vault cert (requires keyVaultSecretId)')
 param enableHttps bool = false
 
+@description('Enable end-to-end TLS (backend pool uses HTTPS:443 instead of HTTP:80)')
+param enableE2ETLS bool = false
+
+@description('Backend hostname for E2E TLS SNI (must match backend cert CN/SAN, e.g. gannonweiner.com)')
+param backendHostName string = ''
+
+@description('Hostname for multi-site listener (e.g. gannonweiner.com). When set, listeners use Multi-site mode instead of Basic.')
+param listenerHostName string = ''
+
+@description('Hostname for a second site (e.g. calleighweiner.com). Adds a second set of multi-site listeners, backend settings, and routing rules.')
+param secondSiteHostName string = ''
+
+@secure()
+@description('Key Vault secret ID for the second site SSL certificate')
+param secondSiteKeyVaultSecretId string = ''
+
 @description('Tags to apply to resources')
 param tags object = {}
 
@@ -61,6 +77,8 @@ var backendAddresses = [
     ipAddress: ip
   }
 ]
+
+var hasSecondSite = enableHttps && !empty(secondSiteHostName) && !empty(secondSiteKeyVaultSecretId)
 
 // ─── Public IP Address ──────────────────────────────────────────
 
@@ -152,23 +170,109 @@ resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = {
         : []
     )
 
-    // ── SSL certificates (Key Vault reference) ───────────────
-    sslCertificates: enableHttps && !empty(keyVaultSecretId)
+    // ── SSL Policy (gateway-wide default) ────────────────────
+    sslPolicy: {
+      policyType: 'Predefined'
+      policyName: 'AppGwSslPolicy20220101'
+    }
+
+    // ── SSL Profiles (per-listener TLS policy override) ────────
+    // Listeners WITHOUT an SSL Profile inherit the gateway-wide default above.
+    // Listeners WITH an SSL Profile use their own stricter policy.
+    sslProfiles: hasSecondSite
       ? [
           {
-            name: 'appgw-cert'
+            name: 'sslprof-calleighweiner'
             properties: {
-              keyVaultSecretId: keyVaultSecretId
+              sslPolicy: {
+                policyType: 'Predefined'
+                policyName: 'AppGwSslPolicy20220101S'
+              }
             }
           }
         ]
       : []
 
-    // ── Listeners ─────────────────────────────────────────────
-    httpListeners: enableHttps
+    // ── Rewrite Rule Sets (response header manipulation) ─────
+    // Equivalent of F5 iRules / LTM Policies for header rewriting.
+    // Applied to routing rules — every response through those rules
+    // gets these headers added, stripped, or overwritten.
+    rewriteRuleSets: enableHttps ? [
+      {
+        name: 'rwset-security-headers'
+        properties: {
+          rewriteRules: [
+            {
+              ruleSequence: 100
+              name: 'rw-add-hsts'
+              actionSet: {
+                responseHeaderConfigurations: [
+                  {
+                    headerName: 'Strict-Transport-Security'
+                    headerValue: 'max-age=31536000; includeSubDomains'
+                  }
+                ]
+              }
+            }
+            {
+              ruleSequence: 200
+              name: 'rw-strip-server'
+              actionSet: {
+                responseHeaderConfigurations: [
+                  {
+                    headerName: 'Server'
+                    headerValue: ''
+                  }
+                ]
+              }
+            }
+            {
+              ruleSequence: 300
+              name: 'rw-add-xcto'
+              actionSet: {
+                responseHeaderConfigurations: [
+                  {
+                    headerName: 'X-Content-Type-Options'
+                    headerValue: 'nosniff'
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    ] : []
+
+    // ── SSL certificates (Key Vault reference) ───────────────
+    sslCertificates: union(
+      enableHttps && !empty(keyVaultSecretId)
         ? [
             {
-              name: 'https-listener'
+              name: 'cert-gannonweiner'
+              properties: {
+                keyVaultSecretId: keyVaultSecretId
+              }
+            }
+          ]
+        : [],
+      hasSecondSite
+        ? [
+            {
+              name: 'cert-calleighweiner'
+              properties: {
+                keyVaultSecretId: secondSiteKeyVaultSecretId
+              }
+            }
+          ]
+        : []
+    )
+
+    // ── Listeners ─────────────────────────────────────────────
+    httpListeners: union(
+      enableHttps
+        ? [
+            {
+              name: 'lstn-gannonweiner-https'
               properties: {
                 frontendIPConfiguration: {
                   id: resourceId(
@@ -189,13 +293,15 @@ resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = {
                   id: resourceId(
                     'Microsoft.Network/applicationGateways/sslCertificates',
                     appGatewayName,
-                    'appgw-cert'
+                    'cert-gannonweiner'
                   )
                 }
+                // No sslProfile — inherits gateway-wide default (AppGwSslPolicy20220101)
+                hostNames: !empty(listenerHostName) ? [listenerHostName] : []
               }
             }
             {
-              name: 'http-listener'
+              name: 'lstn-gannonweiner-http'
               properties: {
                 frontendIPConfiguration: {
                   id: resourceId(
@@ -212,12 +318,13 @@ resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = {
                   )
                 }
                 protocol: 'Http'
+                hostNames: !empty(listenerHostName) ? [listenerHostName] : []
               }
             }
           ]
         : [
             {
-              name: 'http-listener'
+              name: 'lstn-gannonweiner-http'
               properties: {
                 frontendIPConfiguration: {
                   id: resourceId(
@@ -234,14 +341,77 @@ resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = {
                   )
                 }
                 protocol: 'Http'
+                hostNames: !empty(listenerHostName) ? [listenerHostName] : []
+              }
+            }
+          ],
+      // ── Second site listeners ───────────────────────────────
+      hasSecondSite
+        ? [
+            {
+              name: 'lstn-calleighweiner-https'
+              properties: {
+                frontendIPConfiguration: {
+                  id: resourceId(
+                    'Microsoft.Network/applicationGateways/frontendIPConfigurations',
+                    appGatewayName,
+                    'appGatewayPublicFrontendIP'
+                  )
+                }
+                frontendPort: {
+                  id: resourceId(
+                    'Microsoft.Network/applicationGateways/frontendPorts',
+                    appGatewayName,
+                    'port-https'
+                  )
+                }
+                protocol: 'Https'
+                sslCertificate: {
+                  id: resourceId(
+                    'Microsoft.Network/applicationGateways/sslCertificates',
+                    appGatewayName,
+                    'cert-calleighweiner'
+                  )
+                }
+                sslProfile: {
+                  id: resourceId(
+                    'Microsoft.Network/applicationGateways/sslProfiles',
+                    appGatewayName,
+                    'sslprof-calleighweiner'
+                  )
+                }
+                hostNames: [secondSiteHostName]
+              }
+            }
+            {
+              name: 'lstn-calleighweiner-http'
+              properties: {
+                frontendIPConfiguration: {
+                  id: resourceId(
+                    'Microsoft.Network/applicationGateways/frontendIPConfigurations',
+                    appGatewayName,
+                    'appGatewayPublicFrontendIP'
+                  )
+                }
+                frontendPort: {
+                  id: resourceId(
+                    'Microsoft.Network/applicationGateways/frontendPorts',
+                    appGatewayName,
+                    'port-http'
+                  )
+                }
+                protocol: 'Http'
+                hostNames: [secondSiteHostName]
               }
             }
           ]
+        : []
+    )
 
     // ── Backend pool ──────────────────────────────────────────
     backendAddressPools: [
       {
-        name: 'backend-pool'
+        name: 'bp-backend-vms'
         properties: {
           backendAddresses: backendAddresses
         }
@@ -249,37 +419,57 @@ resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = {
     ]
 
     // ── Backend HTTP settings ─────────────────────────────────
-    backendHttpSettingsCollection: [
+    backendHttpSettingsCollection: union([
       {
-        name: 'http-settings'
+        name: 'be-htst-gannonweiner'
         properties: {
-          port: 80
-          protocol: 'Http'
+          port: enableE2ETLS ? 443 : 80
+          protocol: enableE2ETLS ? 'Https' : 'Http'
           cookieBasedAffinity: 'Disabled'
           requestTimeout: 30
+          hostName: enableE2ETLS && !empty(backendHostName) ? backendHostName : null
           probe: {
             id: resourceId(
               'Microsoft.Network/applicationGateways/probes',
               appGatewayName,
-              'health-probe'
+              'hp-gannonweiner'
             )
           }
         }
       }
-    ]
-
-    // ── Health probe (explicit, never rely on defaults) ───────
-    probes: [
+    ], hasSecondSite ? [
       {
-        name: 'health-probe'
+        name: 'be-htst-calleighweiner'
         properties: {
-          protocol: 'Http'
+          port: enableE2ETLS ? 443 : 80
+          protocol: enableE2ETLS ? 'Https' : 'Http'
+          cookieBasedAffinity: 'Disabled'
+          requestTimeout: 30
+          hostName: enableE2ETLS ? secondSiteHostName : null
+          probe: {
+            id: resourceId(
+              'Microsoft.Network/applicationGateways/probes',
+              appGatewayName,
+              'hp-calleighweiner'
+            )
+          }
+        }
+      }
+    ] : [])
+
+    // ── Health probes (explicit, never rely on defaults) ──────
+    probes: union([
+      {
+        name: 'hp-gannonweiner'
+        properties: {
+          protocol: enableE2ETLS ? 'Https' : 'Http'
           path: '/'
           interval: 30
           timeout: 30
           unhealthyThreshold: 3
-          pickHostNameFromBackendHttpSettings: false
-          host: '127.0.0.1'
+          pickHostNameFromBackendHttpSettings: enableE2ETLS && !empty(backendHostName)
+          host: enableE2ETLS && !empty(backendHostName) ? null : '127.0.0.1'
+          port: enableE2ETLS ? 443 : 80
           match: {
             statusCodes: [
               '200-399'
@@ -287,13 +477,32 @@ resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = {
           }
         }
       }
-    ]
+    ], hasSecondSite ? [
+      {
+        name: 'hp-calleighweiner'
+        properties: {
+          protocol: enableE2ETLS ? 'Https' : 'Http'
+          path: '/'
+          interval: 30
+          timeout: 30
+          unhealthyThreshold: 3
+          pickHostNameFromBackendHttpSettings: true
+          port: enableE2ETLS ? 443 : 80
+          match: {
+            statusCodes: [
+              '200-399'
+            ]
+          }
+        }
+      }
+    ] : [])
 
     // ── Routing rules ─────────────────────────────────────────
-    requestRoutingRules: enableHttps
+    requestRoutingRules: union(
+      enableHttps
         ? [
             {
-              name: 'https-rule'
+              name: 'rr-gannonweiner-https'
               properties: {
                 priority: 100
                 ruleType: 'Basic'
@@ -301,27 +510,34 @@ resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = {
                   id: resourceId(
                     'Microsoft.Network/applicationGateways/httpListeners',
                     appGatewayName,
-                    'https-listener'
+                    'lstn-gannonweiner-https'
                   )
                 }
                 backendAddressPool: {
                   id: resourceId(
                     'Microsoft.Network/applicationGateways/backendAddressPools',
                     appGatewayName,
-                    'backend-pool'
+                    'bp-backend-vms'
                   )
                 }
                 backendHttpSettings: {
                   id: resourceId(
                     'Microsoft.Network/applicationGateways/backendHttpSettingsCollection',
                     appGatewayName,
-                    'http-settings'
+                    'be-htst-gannonweiner'
+                  )
+                }
+                rewriteRuleSet: {
+                  id: resourceId(
+                    'Microsoft.Network/applicationGateways/rewriteRuleSets',
+                    appGatewayName,
+                    'rwset-security-headers'
                   )
                 }
               }
             }
             {
-              name: 'http-to-https-redirect'
+              name: 'rr-gannonweiner-redirect'
               properties: {
                 priority: 200
                 ruleType: 'Basic'
@@ -329,14 +545,14 @@ resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = {
                   id: resourceId(
                     'Microsoft.Network/applicationGateways/httpListeners',
                     appGatewayName,
-                    'http-listener'
+                    'lstn-gannonweiner-http'
                   )
                 }
                 redirectConfiguration: {
                   id: resourceId(
                     'Microsoft.Network/applicationGateways/redirectConfigurations',
                     appGatewayName,
-                    'http-to-https'
+                    'rdrcfg-gannonweiner-http-to-https'
                   )
                 }
               }
@@ -344,7 +560,7 @@ resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = {
           ]
         : [
             {
-              name: 'http-rule'
+              name: 'rr-gannonweiner-http'
               properties: {
                 priority: 100
                 ruleType: 'Basic'
@@ -352,47 +568,130 @@ resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = {
                   id: resourceId(
                     'Microsoft.Network/applicationGateways/httpListeners',
                     appGatewayName,
-                    'http-listener'
+                    'lstn-gannonweiner-http'
                   )
                 }
                 backendAddressPool: {
                   id: resourceId(
                     'Microsoft.Network/applicationGateways/backendAddressPools',
                     appGatewayName,
-                    'backend-pool'
+                    'bp-backend-vms'
                   )
                 }
                 backendHttpSettings: {
                   id: resourceId(
                     'Microsoft.Network/applicationGateways/backendHttpSettingsCollection',
                     appGatewayName,
-                    'http-settings'
+                    'be-htst-gannonweiner'
+                  )
+                }
+              }
+            }
+          ],
+      // ── Second site routing rules ───────────────────────────
+      hasSecondSite
+        ? [
+            {
+              name: 'rr-calleighweiner-https'
+              properties: {
+                priority: 110
+                ruleType: 'Basic'
+                httpListener: {
+                  id: resourceId(
+                    'Microsoft.Network/applicationGateways/httpListeners',
+                    appGatewayName,
+                    'lstn-calleighweiner-https'
+                  )
+                }
+                backendAddressPool: {
+                  id: resourceId(
+                    'Microsoft.Network/applicationGateways/backendAddressPools',
+                    appGatewayName,
+                    'bp-backend-vms'
+                  )
+                }
+                backendHttpSettings: {
+                  id: resourceId(
+                    'Microsoft.Network/applicationGateways/backendHttpSettingsCollection',
+                    appGatewayName,
+                    'be-htst-calleighweiner'
+                  )
+                }
+                rewriteRuleSet: {
+                  id: resourceId(
+                    'Microsoft.Network/applicationGateways/rewriteRuleSets',
+                    appGatewayName,
+                    'rwset-security-headers'
+                  )
+                }
+              }
+            }
+            {
+              name: 'rr-calleighweiner-redirect'
+              properties: {
+                priority: 210
+                ruleType: 'Basic'
+                httpListener: {
+                  id: resourceId(
+                    'Microsoft.Network/applicationGateways/httpListeners',
+                    appGatewayName,
+                    'lstn-calleighweiner-http'
+                  )
+                }
+                redirectConfiguration: {
+                  id: resourceId(
+                    'Microsoft.Network/applicationGateways/redirectConfigurations',
+                    appGatewayName,
+                    'rdrcfg-calleighweiner-http-to-https'
                   )
                 }
               }
             }
           ]
+        : []
+    )
 
     // ── Redirect configuration (HTTP → HTTPS) ────────────────
-    redirectConfigurations: enableHttps
-      ? [
-          {
-            name: 'http-to-https'
-            properties: {
-              redirectType: 'Permanent'
-              targetListener: {
-                id: resourceId(
-                  'Microsoft.Network/applicationGateways/httpListeners',
-                  appGatewayName,
-                  'https-listener'
-                )
+    redirectConfigurations: union(
+      enableHttps
+        ? [
+            {
+              name: 'rdrcfg-gannonweiner-http-to-https'
+              properties: {
+                redirectType: 'Permanent'
+                targetListener: {
+                  id: resourceId(
+                    'Microsoft.Network/applicationGateways/httpListeners',
+                    appGatewayName,
+                    'lstn-gannonweiner-https'
+                  )
+                }
+                includePath: true
+                includeQueryString: true
               }
-              includePath: true
-              includeQueryString: true
             }
-          }
-        ]
-      : []
+          ]
+        : [],
+      hasSecondSite
+        ? [
+            {
+              name: 'rdrcfg-calleighweiner-http-to-https'
+              properties: {
+                redirectType: 'Permanent'
+                targetListener: {
+                  id: resourceId(
+                    'Microsoft.Network/applicationGateways/httpListeners',
+                    appGatewayName,
+                    'lstn-calleighweiner-https'
+                  )
+                }
+                includePath: true
+                includeQueryString: true
+              }
+            }
+          ]
+        : []
+    )
   }
 }
 
