@@ -70,6 +70,12 @@ param secondSiteKeyVaultSecretId string = ''
 @description('Tags to apply to resources')
 param tags object = {}
 
+@description('Custom error page URL for HTTP 502 (Bad Gateway). Must be a publicly accessible URL.')
+param customErrorPage502Url string = ''
+
+@description('Custom error page URL for HTTP 403 (Forbidden). Must be a publicly accessible URL.')
+param customErrorPage403Url string = ''
+
 // ─── Backend address pool ───────────────────────────────────────
 
 var backendAddresses = [
@@ -115,6 +121,25 @@ resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = {
       minCapacity: minCapacity
       maxCapacity: maxCapacity
     }
+
+    // ── Custom error pages (gateway-level) ──────────────
+    // Equivalent of F5 Sorry Pages / fallback iRules.
+    // Serves branded HTML from Azure Blob Storage when backends are down (502)
+    // or requests are blocked (403).
+    customErrorConfigurations: union(
+      !empty(customErrorPage502Url) ? [
+        {
+          statusCode: 'HttpStatus502'
+          customErrorPageUrl: customErrorPage502Url
+        }
+      ] : [],
+      !empty(customErrorPage403Url) ? [
+        {
+          statusCode: 'HttpStatus403'
+          customErrorPageUrl: customErrorPage403Url
+        }
+      ] : []
+    )
     gatewayIPConfigurations: [
       {
         name: 'appGatewayIpConfig'

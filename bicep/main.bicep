@@ -86,6 +86,12 @@ param tags object = {
   environment: 'lab'
 }
 
+@description('Custom error page URL for HTTP 502 (Bad Gateway). Must be publicly accessible.')
+param customErrorPage502Url string = ''
+
+@description('Custom error page URL for HTTP 403 (Forbidden). Must be publicly accessible.')
+param customErrorPage403Url string = ''
+
 // ─── Module 1: User-Assigned Managed Identity ───────────────────
 
 module identity 'identity.bicep' = {
@@ -152,6 +158,8 @@ module appGateway 'appgw.bicep' = {
     listenerHostName: listenerHostName
     secondSiteHostName: secondSiteHostName
     secondSiteKeyVaultSecretId: secondSiteKeyVaultSecretId
+    customErrorPage502Url: customErrorPage502Url
+    customErrorPage403Url: customErrorPage403Url
     tags: tags
   }
 }
