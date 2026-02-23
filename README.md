@@ -329,7 +329,7 @@ Application Gateway cannot access Key Vault directly. It needs an identity that 
 | **User-Assigned Managed Identity** | You create the identity explicitly, attach it to App Gateway, and authorize it in Key Vault | **Recommended.** Reusable across resources, survives App Gateway deletion, explicit audit trail |
 | **System-Assigned Managed Identity** | Azure creates the identity automatically when you enable it on the resource | Simpler setup, but tied to the gateway lifecycle — identity and all its RBAC assignments are deleted if the gateway is deleted |
 
-This lab uses **User-Assigned** because it's the enterprise-preferred pattern. The identity exists independently, can be pre-provisioned by a security team, and its RBAC assignments are visible in Key Vault without needing to know the App Gateway's resource ID.
+This lab uses **User-Assigned** because it's the enterprise-preferred pattern. The identity exists independently, can be pre-provisioned by a security team, and its RBAC assignments are visible in Key Vault without needing to know the App Gateway's resource ID. ([App Gateway Key Vault integration](https://learn.microsoft.com/en-us/azure/application-gateway/key-vault-certs) | [Managed identity best practices](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/managed-identity-best-practice-recommendations))
 
 > **Don't go hunting for a system identity toggle.** While App Gateway does support system-assigned identity, it's not the recommended path for Key Vault integration. The steps below use a user-assigned identity exclusively.
 
