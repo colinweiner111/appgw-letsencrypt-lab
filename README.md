@@ -395,19 +395,62 @@ The managed identity needs the **Key Vault Secrets User** role on your Key Vault
 
 Now that the identity chain is established (App Gateway → Managed Identity → Key Vault RBAC), you can reference certificates stored in Key Vault.
 
-1. Navigate to your Application Gateway → **Listeners** in the left nav
-2. Click on an HTTPS listener (e.g., `lstn-app1-https`)
-3. Under **Certificate**, you'll see the current certificate configuration
-4. To add or change a certificate from Key Vault:
-   - Click **Choose a certificate** → **Create new**
-   - **Cert name:** `cert-app1` (CAF prefix for App Gateway certs)
-   - **Certificate source:** Select **Key Vault**
-   - **Managed identity:** Select `id-appgw-lab`
-   - **Key Vault:** Select your Key Vault (`kv-appgw-xxx`)
-   - **Certificate:** Select the certificate (e.g., `appgw-cert` or `app2-cert`)
-5. Click **Save** (this triggers an App Gateway configuration update — takes ~2 minutes)
+> ⚠️ **Because this lab uses RBAC**, you **cannot** add Key Vault certificate references through the Azure portal. The portal will show a validation error ("This key vault doesn't allow access to the managed identity"). This is a [documented limitation](https://learn.microsoft.com/en-us/azure/application-gateway/key-vault-certs#key-vault-azure-role-based-access-control-permission-model). Use the CLI commands below instead. Once the listener exists, you **can** manage it in the portal.
 
-> **Portal shortcut for new gateways:** When creating a new App Gateway through the portal's creation wizard, the **Listeners** tab has a **"Choose a certificate"** option that includes Key Vault as a source. You can set up the managed identity + Key Vault reference during initial deployment.
+#### 4a — Assign the Managed Identity to the App Gateway
+
+```bash
+az network application-gateway identity assign \
+  --resource-group <resource-group> \
+  --gateway-name <appgw-name> \
+  --identity <managed-identity-resource-id>
+```
+
+#### 4b — Add the Key Vault SSL Certificate
+
+Use the **unversioned** secret URI so the certificate auto-rotates:
+
+```bash
+# Get the unversioned secret URI
+SECRET_ID=$(az keyvault secret show \
+  --vault-name <key-vault-name> \
+  --name <cert-name> \
+  --query id --output tsv | sed 's|/[^/]*$||')
+
+az network application-gateway ssl-cert create \
+  --resource-group <resource-group> \
+  --gateway-name <appgw-name> \
+  --name <ssl-cert-name> \
+  --key-vault-secret-id "$SECRET_ID"
+```
+
+#### 4c — Create the HTTPS Listener
+
+```bash
+az network application-gateway http-listener create \
+  --resource-group <resource-group> \
+  --gateway-name <appgw-name> \
+  --name <listener-name> \
+  --frontend-port <https-port-name> \
+  --ssl-cert <ssl-cert-name> \
+  --host-name <your-domain.com>
+```
+
+#### 4d — Create a Routing Rule
+
+```bash
+az network application-gateway rule create \
+  --resource-group <resource-group> \
+  --gateway-name <appgw-name> \
+  --name <rule-name> \
+  --priority <priority> \
+  --http-listener <listener-name> \
+  --backend-pool <backend-pool-name> \
+  --backend-http-settings <http-settings-name> \
+  --rule-type Basic
+```
+
+> **After initial creation:** Once the HTTPS listener exists (created via CLI above), you can modify listener settings, change certificates, and manage routing rules through the Azure portal normally.
 
 ### Step 5 — Verify the Configuration
 
