@@ -9,6 +9,31 @@ Includes complete Bicep IaC (VNet, App Gateway, Key Vault, backend VMs), automat
 >
 > **First time doing this?** Follow the [Step-by-Step Walkthrough](docs/STEP-BY-STEP-GUIDE.md) — it walks through every command with expected outputs, troubleshooting, and DNS provider examples (Azure DNS, Cloudflare, GoDaddy).
 
+---
+
+## Table of Contents
+
+- [What This Repo Deploys](#what-this-repo-deploys)
+- [Quick Start — Deploy Everything](#quick-start--deploy-everything)
+- [Feature Demo Guide](#feature-demo-guide)
+  - [Rewrite Rules — Response Headers](#rewrite-rules--response-headers)
+- [Portal Walkthrough: App Gateway → Key Vault via Managed Identity](#portal-walkthrough-app-gateway--key-vault-via-managed-identity)
+  - [Certificate Rotation](#certificate-rotation)
+  - [Common Issues](#common-issues)
+- [Deployment Parameters](#deployment-parameters)
+- [Which Option Do I Need?](#which-option-do-i-need)
+- [Prerequisites (Both Options)](#prerequisites-both-options)
+- [Option B — DNS-01 Challenge (Recommended)](#option-b--dns-01-challenge-recommended)
+- [Option A — HTTP-01 Challenge](#option-a--http-01-challenge)
+- [Understanding the TLS Trust Chain](#understanding-the-tls-trust-chain)
+- [Certificate Renewal](#certificate-renewal)
+- [Scripts Reference](#scripts-reference)
+  - [Bicep Modules](#bicep-modules)
+- [Troubleshooting](#troubleshooting)
+- [Useful Links](#useful-links)
+
+---
+
 ## What This Repo Deploys
 
 ```
