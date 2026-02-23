@@ -212,7 +212,7 @@
         <div class="label">Negotiated Cipher</div>
         <div class="value" id="ssl-negotiated-cipher" style="font-size:0.78rem;">Detecting...</div>
 
-        <div class="label" style="grid-column:1/-1;"><span style="color:#555;font-size:0.75rem;">&#x1F6E1;&#xFE0F; Listeners without an SSL Profile inherit the gateway-wide default policy. Listeners with an SSL Profile override it &mdash; just like F5 where a virtual server can use the default or a custom <code style="color:#00d4ff;font-size:0.72rem;">Client SSL Profile</code>. Compare this page on gannonweiner.com (gateway default) vs calleighweiner.com (custom SSL Profile).</span></div>
+        <div class="label" style="grid-column:1/-1;"><span style="color:#555;font-size:0.75rem;">&#x1F6E1;&#xFE0F; Listeners without an SSL Profile inherit the gateway-wide default policy. Listeners with an SSL Profile override it &mdash; just like F5 where a virtual server can use the default or a custom <code style="color:#00d4ff;font-size:0.72rem;">Client SSL Profile</code>. Compare this page on app1.contoso.com (gateway default) vs app2.contoso.com (custom SSL Profile).</span></div>
       </div>
     </div>
 
@@ -419,15 +419,15 @@
     const hostHeader = document.getElementById('listener-hostname')?.textContent?.trim() || '';
     if (xfp === 'https') {
       if (hostHeader.includes('calleigh')) {
-        listenerNameEl.textContent = 'lstn-calleighweiner-https (port 443)';
+        listenerNameEl.textContent = 'lstn-app2-https (port 443)';
       } else {
-        listenerNameEl.textContent = 'lstn-gannonweiner-https (port 443)';
+        listenerNameEl.textContent = 'lstn-app1-https (port 443)';
       }
     } else if (xfp === 'http') {
       if (hostHeader.includes('calleigh')) {
-        listenerNameEl.textContent = 'lstn-calleighweiner-http (port 80) → redirects to HTTPS';
+        listenerNameEl.textContent = 'lstn-app2-http (port 80) → redirects to HTTPS';
       } else {
-        listenerNameEl.textContent = 'lstn-gannonweiner-http (port 80) → redirects to HTTPS';
+        listenerNameEl.textContent = 'lstn-app1-http (port 80) → redirects to HTTPS';
       }
     } else {
       listenerNameEl.textContent = 'Unknown';
@@ -443,7 +443,7 @@
     if (xfp === 'https') {
       // SSL Profile name based on hostname
       if (hostHeader.includes('calleigh')) {
-        sslProfileEl.textContent = 'sslprof-calleighweiner';
+        sslProfileEl.textContent = 'sslprof-app2';
         sslPolicyEl.textContent = 'AppGwSslPolicy20220101S (strict)';
         sslMinTlsEl.innerHTML = 'TLS 1.2 <span style="color:#00d464;font-size:0.75rem;">✓ Enforced (ECDHE+AESGCM only)</span>';
       } else {

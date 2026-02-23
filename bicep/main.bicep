@@ -61,10 +61,10 @@ param enableE2ETLS bool = false
 @description('Backend hostname for E2E TLS SNI matching (must match backend cert CN/SAN)')
 param backendHostName string = ''
 
-@description('Hostname for multi-site listener (e.g. gannonweiner.com). Enables multi-site mode.')
+@description('Hostname for multi-site listener (e.g. app1.contoso.com). Enables multi-site mode.')
 param listenerHostName string = ''
 
-@description('Hostname for the second site (e.g. calleighweiner.com). Adds a second set of listeners.')
+@description('Hostname for the second site (e.g. app2.contoso.com). Adds a second set of listeners.')
 param secondSiteHostName string = ''
 
 @secure()

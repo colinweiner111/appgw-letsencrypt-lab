@@ -51,12 +51,12 @@ Includes complete Bicep IaC (VNet, App Gateway, Key Vault, backend VMs), automat
 │  │  │  Public + Private IP│   │  VM 2 (NGINX+SNI) ◄─ no pub │   │  │
 │  │  │                     │   │                              │   │  │
 │  │  │  Listeners:         │   │  Server blocks:              │   │  │
-│  │  │  ├ gannonweiner.com │   │  ├ gannonweiner.com:443      │   │  │
-│  │  │  └ calleighweiner   │   │  └ calleighweiner.com:443    │   │  │
+│  │  │  ├ app1.contoso.com │   │  ├ app1.contoso.com:443      │   │  │
+│  │  │  └ app2.contoso.com │   │  └ app2.contoso.com:443      │   │  │
 │  │  │                     │   │                              │   │  │
 │  │  │  SSL Profiles:      │   │  Let's Encrypt certs         │   │  │
 │  │  │  ├ (gateway default)│   │  (E2E TLS re-encryption)     │   │  │
-│  │  │  └ sslprof-calleigh │   └──────────────────────────────┘   │  │
+│  │  │  └ sslprof-app2     │   └──────────────────────────────┘   │  │
 │  │  │                     │                                      │  │
 │  │  │  Rewrite Rules:     │                                      │  │
 │  │  │  └ rwset-security-  │                                      │  │
@@ -67,8 +67,8 @@ Includes complete Bicep IaC (VNet, App Gateway, Key Vault, backend VMs), automat
 │                │ Key Vault                                           │
 │  ┌─────────────▼──────────────────┐   ┌────────────────────────┐    │
 │  │  kv-appgw-xxx                  │   │  id-appgw-lab          │    │
-│  │  cert-gannonweiner (secret)    │◄──│  User-Assigned MI      │    │
-│  │  cert-calleighweiner (secret)  │   │  Attached to App GW    │    │
+│  │  cert-app1 (secret)            │◄──│  User-Assigned MI      │    │
+│  │  cert-app2 (secret)            │   │  Attached to App GW    │    │
 │  │  RBAC: Key Vault Secrets User  │   │                        │    │
 │  └────────────────────────────────┘   └────────────────────────┘    │
 └──────────────────────────────────────────────────────────────────────┘
@@ -81,7 +81,7 @@ Includes complete Bicep IaC (VNet, App Gateway, Key Vault, backend VMs), automat
 | **User-Assigned Managed Identity** | App Gateway → Key Vault access (enterprise-preferred over system-assigned) |
 | **VNet** with dedicated subnets | App GW subnet (required isolation), backend subnet, optional Bastion |
 | **Application Gateway v2** | Standard_v2 or WAF_v2, public + private IP, autoscale |
-| **Multi-site HTTPS listeners** | Separate listeners per hostname (e.g., `gannonweiner.com`, `calleighweiner.com`) with HTTP→HTTPS redirect |
+| **Multi-site HTTPS listeners** | Separate listeners per hostname (e.g., `app1.contoso.com`, `app2.contoso.com`) with HTTP→HTTPS redirect |
 | **SSL Profiles** | Per-listener TLS policy override — equivalent of F5 Client SSL Profiles |
 | **Rewrite Rules** | Response header manipulation (HSTS, strip Server, X-Content-Type-Options) — equivalent of F5 iRules |
 | **End-to-End TLS** | App Gateway re-encrypts traffic to NGINX backends over HTTPS:443 |
@@ -103,7 +103,7 @@ Includes complete Bicep IaC (VNet, App Gateway, Key Vault, backend VMs), automat
 | cloud-init for NGINX install | Lightweight, no custom images needed |
 | CAF naming convention for sub-resources | `lstn-`, `be-htst-`, `hp-`, `rr-`, `rdrcfg-`, `bp-`, `cert-`, `sslprof-`, `rwset-` prefixes for clarity |
 | Multi-site listeners (not Basic) | Each hostname gets its own listener, enabling per-site SSL Profiles and routing |
-| Differentiated SSL Profiles | `gannonweiner.com` inherits gateway default policy; `calleighweiner.com` uses a strict custom SSL Profile — demonstrates F5-style per-VIP TLS control |
+| Differentiated SSL Profiles | `app1.contoso.com` inherits gateway default policy; `app2.contoso.com` uses a strict custom SSL Profile — demonstrates F5-style per-VIP TLS control |
 | Rewrite rules on HTTPS routing rules only | Security headers only apply to HTTPS responses; HTTP requests are redirected before reaching a backend |
 | Backend hostname override (not `pickHostNameFromBackendTarget`) | Explicit SNI hostname in backend HTTP settings for VM/IaaS backends per Microsoft guidance |
 
@@ -256,7 +256,7 @@ All three are **response header** rewrites — they modify what the client recei
 
 ```bash
 # Curl directly to a backend VM — bypasses App Gateway entirely
-curl -skI --resolve gannonweiner.com:443:10.0.1.4 https://gannonweiner.com
+curl -skI --resolve app1.contoso.com:443:10.0.1.4 https://app1.contoso.com
 ```
 
 You'll see:
@@ -268,7 +268,7 @@ You'll see:
 
 ```bash
 # Curl through App Gateway — rewrite rules are applied
-curl -skI --resolve gannonweiner.com:443:52.251.47.185 https://gannonweiner.com
+curl -skI --resolve app1.contoso.com:443:<App-Gateway-Public-IP> https://app1.contoso.com
 ```
 
 You'll see:
@@ -278,7 +278,7 @@ You'll see:
 
 **3. Browser DevTools (visual proof for customers):**
 
-1. Open **https://gannonweiner.com** in Edge or Chrome
+1. Open **https://app1.contoso.com** in Edge or Chrome
 2. Press **F12** → **Network** tab
 3. Refresh the page (Ctrl+R)
 4. Click the first request (the HTML document)
@@ -295,7 +295,7 @@ Scroll to the **"Rewrite Rules — Response Headers"** card on the page. It docu
 2. Click **rwset-security-headers**
 3. Show the three rules: `rw-add-hsts`, `rw-strip-server`, `rw-add-xcto`
 4. Click into one to show the condition/action UI
-5. Navigate to **Rules** → click `rr-gannonweiner-https` → show the rewrite set association
+5. Navigate to **Rules** → click `rr-app1-https` → show the rewrite set association
 
 #### F5 Comparison
 
@@ -391,15 +391,15 @@ The managed identity needs the **Key Vault Secrets User** role on your Key Vault
 Now that the identity chain is established (App Gateway → Managed Identity → Key Vault RBAC), you can reference certificates stored in Key Vault.
 
 1. Navigate to your Application Gateway → **Listeners** in the left nav
-2. Click on an HTTPS listener (e.g., `lstn-gannonweiner-https`)
+2. Click on an HTTPS listener (e.g., `lstn-app1-https`)
 3. Under **Certificate**, you'll see the current certificate configuration
 4. To add or change a certificate from Key Vault:
    - Click **Choose a certificate** → **Create new**
-   - **Cert name:** `cert-gannonweiner` (CAF prefix for App Gateway certs)
+   - **Cert name:** `cert-app1` (CAF prefix for App Gateway certs)
    - **Certificate source:** Select **Key Vault**
    - **Managed identity:** Select `id-appgw-lab`
    - **Key Vault:** Select your Key Vault (`kv-appgw-xxx`)
-   - **Certificate:** Select the certificate (e.g., `appgw-cert` or `calleighweiner-cert`)
+   - **Certificate:** Select the certificate (e.g., `appgw-cert` or `app2-cert`)
 5. Click **Save** (this triggers an App Gateway configuration update — takes ~2 minutes)
 
 > **Portal shortcut for new gateways:** When creating a new App Gateway through the portal's creation wizard, the **Listeners** tab has a **"Choose a certificate"** option that includes Key Vault as a source. You can set up the managed identity + Key Vault reference during initial deployment.
@@ -411,11 +411,11 @@ After the update completes, confirm everything is wired correctly:
 1. **App Gateway → Identity → User assigned**: `id-appgw-lab` should be listed
 2. **App Gateway → Listeners**: HTTPS listeners should show the certificate name with a Key Vault icon
 3. **Key Vault → Access control (IAM) → Role assignments**: Search for `id-appgw-lab` — it should have **Key Vault Secrets User**
-4. **Browse to your site** (e.g., `https://gannonweiner.com`): The certificate should be valid with no browser warnings
+4. **Browse to your site** (e.g., `https://app1.contoso.com`): The certificate should be valid with no browser warnings
 
 ```bash
 # CLI verification — confirm the cert is being served correctly
-curl -svI --resolve gannonweiner.com:443:52.251.47.185 https://gannonweiner.com 2>&1 | grep -E "subject:|issuer:|expire"
+curl -svI --resolve app1.contoso.com:443:<App-Gateway-Public-IP> https://app1.contoso.com 2>&1 | grep -E "subject:|issuer:|expire"
 ```
 
 ### How It All Connects
@@ -450,8 +450,8 @@ curl -svI --resolve gannonweiner.com:443:52.251.47.185 https://gannonweiner.com 
                     ▼
         ┌───────────────────────┐
         │  Secret (PFX)         │
-        │  ├ appgw-cert         │
-        │  └ calleighweiner-cert│
+        │  ├ cert-app1           │
+        │  └ cert-app2           │
         └───────────────────────┘
 ```
 
