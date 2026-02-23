@@ -387,7 +387,9 @@ The managed identity needs the **Key Vault Secrets User** role on your Key Vault
 4. Under **Select principal**, search for **id-appgw-lab** and select it
 5. Click **Add** → **Save**
 
-> **Which model is my Key Vault using?** Go to Key Vault → **Access configuration** in the left nav. It will show either **"Azure role-based access control"** or **"Vault access policy"**. This lab uses RBAC (the modern best practice).
+> **Which model is my Key Vault using?** Go to Key Vault → **Access configuration** in the left nav. It will show either **"Azure role-based access control"** or **"Vault access policy"**. This lab uses RBAC (the modern best practice) via Bicep/CLI.
+>
+> ⚠️ **Portal limitation:** The Azure portal [does not support](https://learn.microsoft.com/en-us/azure/application-gateway/key-vault-certs#key-vault-azure-role-based-access-control-permission-model) configuring App Gateway Key Vault certificate references when the Key Vault uses RBAC. If using the portal exclusively, use **Vault Access Policy** (see the [Portal Walkthrough](docs/PORTAL-WALKTHROUGH.md)). For RBAC, use CLI/Bicep to create the initial listener — it can then be managed in the portal.
 
 ### Step 4 — Add a Key Vault Certificate to a Listener
 

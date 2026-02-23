@@ -10,6 +10,14 @@ When you're done, you'll have:
 
 > **Scenario:** This mirrors an AVS or on-prem migration where backend servers sit on a private network, reachable only by IP, and App Gateway provides the public frontend with TLS termination and re-encryption.
 
+> ⚠️ **Portal Limitation — Key Vault RBAC vs. Access Policy**
+>
+> The Azure portal **does not support** configuring App Gateway HTTPS listeners with Key Vault certificates when the Key Vault uses the **Azure RBAC permission model**. This is a [documented limitation](https://learn.microsoft.com/en-us/azure/application-gateway/key-vault-certs#key-vault-azure-role-based-access-control-permission-model):
+>
+> *"Specifying Azure Key Vault certificates that are subject to the role-based access control permission model is not supported via the portal. The first few steps to reference the Key Vault must be completed via ARM template, Bicep, CLI, or PowerShell."*
+>
+> **This walkthrough uses Vault Access Policy** so every step works end-to-end in the portal. For production deployments using RBAC (the recommended model), use CLI/Bicep to create the initial HTTPS listener — see the [main README](../README.md) for those commands. Once created via CLI, the listener appears in the portal and can be managed normally.
+
 ---
 
 ## Table of Contents
@@ -171,15 +179,23 @@ iisreset /restart
    - **Region:** `East US 2`
    - **Pricing tier:** `Standard`
 3. **Access configuration** tab:
-   - **Permission model:** `Azure role-based access control` (recommended over vault access policies)
+   - **Permission model:** `Vault access policy`
+4. **Networking** tab:
+   - **Allow public access from:** `All networks` (for lab simplicity)
+5. **Review + create** → **Create**
+
+> **Why Vault Access Policy?** The Azure portal [does not support](https://learn.microsoft.com/en-us/azure/application-gateway/key-vault-certs#key-vault-azure-role-based-access-control-permission-model) configuring App Gateway Key Vault references with the RBAC permission model. For a portal-only walkthrough, access policy is required. For production deployments using RBAC, use CLI/Bicep to configure the initial listener.
+
+### Grant yourself access to manage certificates
+
+With vault access policy, your user needs an access policy to import certificates:
+
+1. Go to your new Key Vault → **Access policies** → **+ Create**
+2. **Permissions** tab:
+   - Under **Certificate permissions**, select: **Get**, **List**, **Import**
+   - Under **Secret permissions**, select: **Get**, **List**
+3. **Principal** tab: Search for and select your own user account
 4. **Review + create** → **Create**
-
-### Grant yourself access to import certificates
-
-1. Go to your new Key Vault → **Access control (IAM)** → **+ Add role assignment**
-2. Role: **Key Vault Certificates Officer**
-3. Members: Select your own user account
-4. **Review + assign**
 
 ---
 
@@ -216,21 +232,22 @@ This identity is what App Gateway uses to authenticate to Key Vault. It's create
 
 The managed identity needs permission to **read secrets** from Key Vault (App Gateway retrieves certs as secrets).
 
-1. Go to your Key Vault → **Access control (IAM)** → **+ Add role assignment**
-2. Role: **Key Vault Secrets User**
-3. Members → **Managed identity** → Select `id-appgw-demo`
-4. **Review + assign**
+1. Go to your Key Vault → **Access policies** → **+ Create**
+2. **Permissions** tab:
+   - Under **Secret permissions**, select: **Get** (minimum required)
+3. **Principal** tab: Search for and select `id-appgw-demo`
+4. **Review + create** → **Create**
 
-> **Why Secrets User, not Certificates Reader?** App Gateway retrieves the certificate's **secret** (which contains the private key), not just the certificate object. `Key Vault Secrets User` grants read access to secrets. `Key Vault Certificates Officer` is for managing certificates — the identity doesn't need that.
+> **Why Secret Get, not Certificate Get?** App Gateway retrieves the certificate's **secret** (which contains the private key + cert bundle as a PFX), not just the certificate object. That's why the identity needs `secrets/get` — the certificate's private key material is stored as a secret under the hood.
 
 ### Auth Chain Summary
 
 ```
 App Gateway
   └── uses ──► id-appgw-demo (User-Assigned MI)
-                   └── has role ──► Key Vault Secrets User
-                                      └── on ──► kv-appgw-demo
-                                                    └── stores ──► cert-app1 (as a secret)
+                   └── has access policy ──► Secret: Get
+                                               └── on ──► kv-appgw-demo
+                                                             └── stores ──► cert-app1 (as a secret)
 ```
 
 ---
@@ -519,8 +536,9 @@ If it shows **Unhealthy**, check:
 | Mistake | Symptom | Fix |
 |---|---|---|
 | Forgot to assign managed identity to App Gateway | Key Vault cert doesn't appear in listener dropdown | App Gateway → Identity → User assigned → Add `id-appgw-demo` |
-| Managed identity missing `Key Vault Secrets User` role | Listener creation fails or cert shows warning | Key Vault → IAM → Add role → Secrets User → select the MI |
-| Used `Certificates Officer` instead of `Secrets User` for the MI | 403 Forbidden from Key Vault at runtime | App Gateway reads certs as **secrets** (to get the private key) |
+| Managed identity missing Secret Get permission | Listener creation fails or cert shows warning | Key Vault → Access policies → Create → Secret: Get → select the MI |
+| Used Certificate permissions instead of Secret permissions for the MI | 403 Forbidden from Key Vault at runtime | App Gateway reads certs as **secrets** (to get the private key) |
+| Key Vault using RBAC instead of Access Policy | Portal shows "key vault doesn't allow access to the managed identity" | Switch to Vault Access Policy, or use CLI/Bicep for RBAC-mode Key Vaults |
 | No host header override in backend settings | IIS returns wrong site or default cert | Backend settings → Override hostname → `app1.contoso.com` |
 | Backend in same subnet as App Gateway | Deployment fails | App Gateway subnet must be **dedicated** — move VM to `subnet-backend` |
 | NSG blocking 443 from App Gateway subnet | Backend health shows Unhealthy | NSG on `subnet-backend` → Allow inbound 443 from `10.0.0.0/24` |
