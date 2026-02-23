@@ -8,6 +8,8 @@ Includes complete Bicep IaC (VNet, App Gateway, Key Vault, backend VMs), automat
 > **New to Let's Encrypt?** Read [How Let's Encrypt Works](docs/HOW-LETS-ENCRYPT-WORKS.md) first — it explains certificates, ACME challenges, certbot, PFX conversion, and the trust chain in plain language before you dive into the lab steps.
 >
 > **First time doing this?** Follow the [Step-by-Step Walkthrough](docs/STEP-BY-STEP-GUIDE.md) — it walks through every command with expected outputs, troubleshooting, and DNS provider examples (Azure DNS, Cloudflare, GoDaddy).
+>
+> **Prefer the portal?** Follow the [End-to-End Portal Walkthrough](docs/PORTAL-WALKTHROUGH.md) — build the entire environment from scratch using only the Azure portal (VNet, VM, Key Vault, Managed Identity, App Gateway, backend pool, TLS everywhere).
 
 ---
 
@@ -18,6 +20,7 @@ Includes complete Bicep IaC (VNet, App Gateway, Key Vault, backend VMs), automat
 - [Feature Demo Guide](#feature-demo-guide)
   - [Rewrite Rules — Response Headers](#rewrite-rules--response-headers)
 - [Portal Walkthrough: App Gateway → Key Vault via Managed Identity](#portal-walkthrough-app-gateway--key-vault-via-managed-identity)
+- [End-to-End Portal Walkthrough](docs/PORTAL-WALKTHROUGH.md) *(separate guide — build everything from scratch in the portal)*
   - [Certificate Rotation](#certificate-rotation)
   - [Common Issues](#common-issues)
 - [Deployment Parameters](#deployment-parameters)
