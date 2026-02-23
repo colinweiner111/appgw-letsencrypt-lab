@@ -388,35 +388,23 @@ The managed identity needs the **Key Vault Secrets User** role on your Key Vault
 5. Click **Add** → **Save**
 
 > **Which model is my Key Vault using?** Go to Key Vault → **Access configuration** in the left nav. It will show either **"Azure role-based access control"** or **"Vault access policy"**. This lab uses RBAC (the modern best practice) via Bicep/CLI.
->
-> ⚠️ **Portal limitation:** The Azure portal [does not support](https://learn.microsoft.com/en-us/azure/application-gateway/key-vault-certs#key-vault-azure-role-based-access-control-permission-model) configuring App Gateway Key Vault certificate references when the Key Vault uses RBAC. If using the portal exclusively, use **Vault Access Policy** (see the [Portal Walkthrough](docs/PORTAL-WALKTHROUGH.md)). For RBAC, use CLI/Bicep to create the initial listener — it can then be managed in the portal.
 
 ### Step 4 — Add a Key Vault Certificate to a Listener
 
 Now that the identity chain is established (App Gateway → Managed Identity → Key Vault RBAC), you can reference certificates stored in Key Vault.
 
-> ⚠️ **Because this lab uses RBAC**, you **cannot** add Key Vault certificate references through the Azure portal. The portal will show a validation error ("This key vault doesn't allow access to the managed identity"). This is a [documented limitation](https://learn.microsoft.com/en-us/azure/application-gateway/key-vault-certs#key-vault-azure-role-based-access-control-permission-model). Use the CLI commands below instead. Once the listener exists, you **can** manage it in the portal.
+> ⚠️ **Portal limitation:** The Azure portal [does not support](https://learn.microsoft.com/en-us/azure/application-gateway/key-vault-certs#key-vault-azure-role-based-access-control-permission-model) adding Key Vault certificate references when the Key Vault uses RBAC. You must use **CLI, Bicep, or ARM** for the initial setup. Once the listener exists, you can manage it in the portal. For a portal-only approach, see the [Portal Walkthrough](docs/PORTAL-WALKTHROUGH.md) (which uses Vault Access Policy instead).
 
-#### 4a — Assign the Managed Identity to the App Gateway
-
-```bash
-az network application-gateway identity assign \
-  --resource-group <resource-group> \
-  --gateway-name <appgw-name> \
-  --identity <managed-identity-resource-id>
-```
-
-#### 4b — Add the Key Vault SSL Certificate
-
-Use the **unversioned** secret URI so the certificate auto-rotates:
+First, add the Key Vault certificate to App Gateway. Use the **unversioned** secret URI so the certificate auto-rotates when renewed in Key Vault:
 
 ```bash
-# Get the unversioned secret URI
+# Get the unversioned secret URI (strips the version segment)
 SECRET_ID=$(az keyvault secret show \
   --vault-name <key-vault-name> \
   --name <cert-name> \
   --query id --output tsv | sed 's|/[^/]*$||')
 
+# Add the Key Vault SSL certificate to App Gateway
 az network application-gateway ssl-cert create \
   --resource-group <resource-group> \
   --gateway-name <appgw-name> \
@@ -424,7 +412,7 @@ az network application-gateway ssl-cert create \
   --key-vault-secret-id "$SECRET_ID"
 ```
 
-#### 4c — Create the HTTPS Listener
+Then create the HTTPS listener that uses it:
 
 ```bash
 az network application-gateway http-listener create \
@@ -436,7 +424,7 @@ az network application-gateway http-listener create \
   --host-name <your-domain.com>
 ```
 
-#### 4d — Create a Routing Rule
+Finally, create a routing rule to connect the listener to a backend:
 
 ```bash
 az network application-gateway rule create \
@@ -450,7 +438,7 @@ az network application-gateway rule create \
   --rule-type Basic
 ```
 
-> **After initial creation:** Once the HTTPS listener exists (created via CLI above), you can modify listener settings, change certificates, and manage routing rules through the Azure portal normally.
+> **After initial creation:** You can modify listener settings, swap certificates, and manage routing rules through the Azure portal normally.
 
 ### Step 5 — Verify the Configuration
 
