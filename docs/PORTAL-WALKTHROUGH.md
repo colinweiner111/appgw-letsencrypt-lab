@@ -189,7 +189,7 @@ iisreset /restart
 3. Members: Select your own user account
 4. **Review + assign**
 
-> **Also add Key Vault Secrets User to yourself.** The portal validates your permissions when selecting Key Vault certs during App Gateway configuration. Without this role on your own account, the portal may show a misleading error.
+> **Also add Key Vault Secrets User to yourself.** You'll need this in [Step 13](#step-13--add-the-key-vault-certificate-and-https-listener-cli) to run the CLI commands that read the certificate's secret URI from Key Vault.
 >
 > Key Vault → Access control (IAM) → + Add role assignment → **Key Vault Secrets User** → select your user → Review + assign
 
@@ -283,27 +283,22 @@ This is the most complex portal form. Take it tab by tab.
 
 ### Configuration tab
 
-This is where you wire up the listener, rule, and backend settings together. Click **+ Add a routing rule**.
+This is where you wire up a temporary listener so the App Gateway can be created. The real HTTPS listener with Key Vault cert is added via CLI in [Step 13](#step-13--add-the-key-vault-certificate-and-https-listener-cli) (because the portal can't do Key Vault + RBAC).
 
-#### Routing rule — Listener subtab
+Click **+ Add a routing rule**.
+
+#### Routing rule — Listener subtab (temporary HTTP)
 
 | Field | Value |
 |---|---|
-| Rule name | `rr-app1-https` |
+| Rule name | `rr-app1-temp` |
 | Priority | `100` |
-| Listener name | `lstn-app1-https` |
-| Protocol | `HTTPS` |
-| Port | `443` |
-| **Choose a certificate** | **Choose a certificate from Key Vault** |
-| Cert name | `cert-app1` |
-| Managed identity | `id-appgw-demo` |
-| Key vault | `kv-appgw-demo` |
-| Certificate | `cert-app1` |
-| Listener type | `Multi site` |
-| Host type | `Single` |
-| Host name | `app1.contoso.com` |
+| Listener name | `lstn-app1-http` |
+| Protocol | `HTTP` |
+| Port | `80` |
+| Listener type | `Basic` |
 
-> **This is the moment** where the managed identity chain comes together. If any step was missed (identity not created, not attached, not authorized in Key Vault), this dropdown will fail or the certificate won't appear.
+> **Why a temporary HTTP listener?** The portal requires at least one routing rule to create an App Gateway. Since the portal [can't configure Key Vault certs with RBAC](https://learn.microsoft.com/en-us/azure/application-gateway/key-vault-certs#key-vault-azure-role-based-access-control-permission-model), we create a throwaway HTTP listener here and add the real HTTPS listener via CLI in Step 13. The temp listener is cleaned up in Step 13e.
 
 #### Routing rule — Backend targets subtab
 
@@ -608,7 +603,7 @@ If it shows **Unhealthy**, check:
 
 | Mistake | Symptom | Fix |
 |---|---|---|
-| Forgot to assign managed identity to App Gateway | Key Vault cert doesn't appear in listener dropdown | App Gateway → Identity → User assigned → Add `id-appgw-demo` |
+| Forgot to assign managed identity to App Gateway | CLI `ssl-cert create` fails — App Gateway has no credentials to reach Key Vault | Step 13a assigns the MI — must be done before adding the cert |
 | Managed identity missing `Key Vault Secrets User` role | Listener creation fails or cert shows warning | Key Vault → IAM → Add role → Secrets User → select the MI |
 | Used `Certificates Officer` instead of `Secrets User` for the MI | 403 Forbidden from Key Vault at runtime | App Gateway reads certs as **secrets** (to get the private key) |
 | Tried to add Key Vault cert via portal with RBAC | Portal shows "key vault doesn't allow access" | This is a [documented limitation](https://learn.microsoft.com/en-us/azure/application-gateway/key-vault-certs#key-vault-azure-role-based-access-control-permission-model) — use CLI ([Step 13](#step-13--add-the-key-vault-certificate-and-https-listener-cli)) |
