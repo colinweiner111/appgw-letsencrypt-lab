@@ -289,18 +289,24 @@ Scroll to the **"Rewrite Rules — Response Headers"** card on the page. It docu
 
 ## Portal Walkthrough: App Gateway → Key Vault via Managed Identity
 
-This section walks through configuring Application Gateway to pull TLS certificates from Azure Key Vault using a **User-Assigned Managed Identity** — entirely through the Azure portal. This is the same configuration that the Bicep templates deploy automatically, but understanding the portal steps is essential for troubleshooting, auditing, and customer demos.
+Application Gateway uses a **User-Assigned Managed Identity** to retrieve the certificate secret from Key Vault. Not a system-assigned identity, not a service principal — a dedicated, explicitly-created managed identity that you attach to the gateway and authorize in Key Vault.
 
-### Why a Managed Identity?
+This is the part that trips people up. There is no "connect to Key Vault" button on the App Gateway. Instead, you build a chain: **create an identity → attach it to the gateway → authorize it in Key Vault → reference the cert in a listener**. Each step matters, and the portal doesn't guide you through them in order.
 
-Application Gateway cannot access Key Vault directly. It needs an identity that Key Vault recognizes and trusts. Azure supports two approaches:
+This section walks through that chain entirely in the Azure portal. It's the same configuration the Bicep templates deploy automatically, but understanding the portal steps is essential for troubleshooting, auditing, and customer demos.
 
-| Approach | How It Works | When to Use |
+### Why User-Assigned (Not System-Assigned)?
+
+Application Gateway cannot access Key Vault directly. It needs an identity that Key Vault recognizes and trusts. Azure supports two types:
+
+| Identity Type | How It Works | When to Use |
 |---|---|---|
-| **User-Assigned Managed Identity** | You create the identity explicitly, assign it RBAC, and attach it to App Gateway | **Recommended.** Reusable across resources, survives App Gateway deletion, explicit audit trail |
-| **System-Assigned Managed Identity** | Azure creates the identity automatically when you enable it on App Gateway | Simpler setup, but tied to the App Gateway lifecycle — deleted when the gateway is deleted |
+| **User-Assigned Managed Identity** | You create the identity explicitly, attach it to App Gateway, and authorize it in Key Vault | **Recommended.** Reusable across resources, survives App Gateway deletion, explicit audit trail |
+| **System-Assigned Managed Identity** | Azure creates the identity automatically when you enable it on the resource | Simpler setup, but tied to the gateway lifecycle — identity and all its RBAC assignments are deleted if the gateway is deleted |
 
 This lab uses **User-Assigned** because it's the enterprise-preferred pattern. The identity exists independently, can be pre-provisioned by a security team, and its RBAC assignments are visible in Key Vault without needing to know the App Gateway's resource ID.
+
+> **Don't go hunting for a system identity toggle.** While App Gateway does support system-assigned identity, it's not the recommended path for Key Vault integration. The steps below use a user-assigned identity exclusively.
 
 ### Step 1 — Create a User-Assigned Managed Identity
 
@@ -316,9 +322,21 @@ This lab uses **User-Assigned** because it's the enterprise-preferred pattern. T
 
 > **Why the same resource group and region?** While managed identities can technically live anywhere, keeping them co-located with the resources they serve simplifies lifecycle management and avoids cross-region dependency issues.
 
-### Step 2 — Grant Key Vault Access to the Managed Identity
+### Step 2 — Attach the Managed Identity to Application Gateway
 
-The managed identity needs the **Key Vault Secrets User** role on your Key Vault. App Gateway reads certificates from the Key Vault **secrets** endpoint (not the certificates endpoint), so this is the minimum required role.
+Do this **before** setting up Key Vault permissions. The identity must be attached to the gateway first so it exists as a recognized principal when you assign RBAC in Key Vault.
+
+1. Navigate to your Application Gateway (`appgw-lab`) → **Identity** in the left nav (under **Settings**)
+2. Click the **User assigned** tab at the top
+3. Click **+ Add**
+4. In the flyout, select **id-appgw-lab** → click **Add**
+5. Wait for the update to complete (you'll see the identity listed with its Client ID)
+
+> **What this does:** Tells App Gateway "you can authenticate as this identity." Without it, the gateway has no credentials to present to Key Vault — even if the RBAC role is perfectly configured.
+
+### Step 3 — Authorize the Identity in Key Vault
+
+The managed identity needs the **Key Vault Secrets User** role on your Key Vault. This is the hidden detail most people miss: App Gateway reads certificates from the Key Vault **secrets** endpoint (not the certificates endpoint). That's why the role is **Secrets** User — the certificate's private key material is stored as a secret.
 
 #### If Your Key Vault Uses Azure RBAC (Recommended)
 
@@ -343,17 +361,7 @@ The managed identity needs the **Key Vault Secrets User** role on your Key Vault
 
 > **Which model is my Key Vault using?** Go to Key Vault → **Access configuration** in the left nav. It will show either **"Azure role-based access control"** or **"Vault access policy"**. This lab uses RBAC (the modern best practice).
 
-### Step 3 — Attach the Managed Identity to Application Gateway
-
-1. Navigate to your Application Gateway (`appgw-lab`) → **Identity** in the left nav (under **Settings**)
-2. Click the **User assigned** tab at the top
-3. Click **+ Add**
-4. In the flyout, select **id-appgw-lab** → click **Add**
-5. Wait for the update to complete (you'll see the identity listed with its Client ID)
-
-> **Important:** This step tells App Gateway "you can act as this identity." Without it, the gateway cannot present credentials to Key Vault even if the RBAC role is in place.
-
-### Step 4 — Add a Key Vault Certificate to Application Gateway
+### Step 4 — Add a Key Vault Certificate to a Listener
 
 Now that the identity chain is established (App Gateway → Managed Identity → Key Vault RBAC), you can reference certificates stored in Key Vault.
 
@@ -388,47 +396,64 @@ curl -svI --resolve gannonweiner.com:443:52.251.47.185 https://gannonweiner.com 
 ### How It All Connects
 
 ```
-┌───────────────────────────────────┐
-│  Application Gateway (appgw-lab)  │
-│                                   │
-│  Identity: id-appgw-lab ─────────────┐
-│  Listener: lstn-gannonweiner-https│   │
-│    └─ Cert: cert-gannonweiner     │   │
-│       └─ Source: Key Vault ───────────┼──────┐
-└───────────────────────────────────┘   │      │
-                                        │      │
-┌───────────────────────────────────┐   │      │
-│  Managed Identity (id-appgw-lab)  │◄──┘      │
-│  RBAC Role: Key Vault Secrets User ──────┐   │
-└───────────────────────────────────┘      │   │
-                                           │   │
-┌───────────────────────────────────┐      │   │
-│  Key Vault (kv-appgw-xxx)         │◄─────┘   │
-│  Permission model: Azure RBAC     │          │
-│                                   │◄─────────┘
-│  Secret: appgw-cert (PFX)         │  GET /secrets/appgw-cert
-│  Secret: calleighweiner-cert (PFX)│
-└───────────────────────────────────┘
+                  Client
+                    │
+                    ▼
+        ┌───────────────────────┐
+        │  Application Gateway  │
+        │  (appgw-lab)          │
+        └───────────┬───────────┘
+                    │  authenticates as
+                    ▼
+        ┌───────────────────────┐
+        │  User-Assigned MI     │
+        │  (id-appgw-lab)       │
+        └───────────┬───────────┘
+                    │  presents token to
+                    ▼
+        ┌───────────────────────┐
+        │  Azure AD / Entra ID  │
+        │  validates identity   │
+        └───────────┬───────────┘
+                    │  authorized via
+                    ▼
+        ┌───────────────────────┐
+        │  Key Vault RBAC       │
+        │  Role: Secrets User   │
+        └───────────┬───────────┘
+                    │  GET /secrets/...
+                    ▼
+        ┌───────────────────────┐
+        │  Secret (PFX)         │
+        │  ├ appgw-cert         │
+        │  └ calleighweiner-cert│
+        └───────────────────────┘
 ```
 
-At runtime, the flow is:
+This is why the role is **Key Vault Secrets User** and not Key Vault Certificates User — App Gateway retrieves the PFX from the **secrets** endpoint, where the private key material lives.
+
+At runtime:
 1. App Gateway needs the TLS cert for a listener handshake
-2. It authenticates to Azure AD **as** `id-appgw-lab` (the attached managed identity)
+2. It authenticates to Azure AD **as** `id-appgw-lab` (the user-assigned managed identity)
 3. It calls `GET https://kv-appgw-xxx.vault.azure.net/secrets/appgw-cert/<version>`
 4. Key Vault checks RBAC → `id-appgw-lab` has **Key Vault Secrets User** → **allowed**
-5. Key Vault returns the PFX certificate data
+5. Key Vault returns the PFX certificate data (the secret backing the certificate)
 6. App Gateway uses the cert for the TLS handshake with the client
 
-> **Automatic rotation:** App Gateway polls Key Vault every **4 hours** for certificate updates. If you import a renewed certificate to the same Key Vault certificate name, App Gateway will pick it up automatically within 4 hours — no redeployment needed. You can also trigger an immediate refresh by updating the App Gateway configuration.
+### Certificate Rotation
+
+> **App Gateway polls Key Vault every ~4 hours for new certificate versions.** If you import a renewed certificate to the same Key Vault certificate name, App Gateway picks it up automatically — no redeployment, no restart, no downtime. You can also trigger an immediate refresh by saving any configuration change on the App Gateway (even a no-op update).
+
+This is the answer to the inevitable question: *"How does rotation work?"* — it's automatic, polling-based, and requires zero intervention as long as the new cert version lands in the same Key Vault certificate name.
 
 ### Common Issues
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| **"Key Vault is not accessible"** during listener save | Managed identity doesn't have RBAC on Key Vault | Add **Key Vault Secrets User** role (Step 2) |
-| **"User-assigned identity not found"** | Identity not attached to App Gateway | Attach via **Identity** blade (Step 3) |
+| **"Key Vault is not accessible"** during listener save | Managed identity not authorized in Key Vault | Add **Key Vault Secrets User** role (Step 3) |
+| **"User-assigned identity not found"** | Identity not attached to App Gateway | Attach via **Identity** blade (Step 2) |
 | App Gateway deployment enters **Failed** state | RBAC propagation delay (can take 1-2 minutes after assignment) | Wait 2 minutes, then stop/start the App Gateway |
-| Certificate shows in Key Vault but not in App Gateway dropdown | Key Vault permission model mismatch — App Gateway reads **secrets**, not **certificates** | Ensure the role grants secret access, not just certificate access |
+| Certificate shows in Key Vault but not in App Gateway dropdown | App Gateway reads **secrets**, not **certificates** | Ensure the role grants secret access, not just certificate access |
 | **ForbiddenByRbac** in Activity Log | Wrong role assigned (e.g., Key Vault Reader instead of Key Vault Secrets User) | Reassign with the correct role: **Key Vault Secrets User** |
 | Cert works initially but breaks after Key Vault network rules change | Key Vault firewall now blocks App Gateway | Add App Gateway's subnet to Key Vault network rules, or use Private Endpoint |
 
